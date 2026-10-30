@@ -363,6 +363,10 @@ class MainActivity : FlutterActivity() {
             putInt("last_socks_port", localSocksPort)
             putBoolean("last_split_enabled", splitEnabled)
             putString("last_split_mode", splitMode)
+            // کاشی Quick Settings از همین مقادیر برای اتصال استفاده می‌کند؛ بدون
+            // این دو، تونل با split tunneling فعال ولی لیست خالی بالا می‌آمد.
+            putStringSet("last_selected_apps", LinkedHashSet(selectedApps))
+            putStringSet("last_excluded_ips", LinkedHashSet(excludedIps))
             apply()
         }
         startService(intent)
