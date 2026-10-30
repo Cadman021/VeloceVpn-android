@@ -309,7 +309,8 @@ class VeloceVpnService : VpnService() {
             Log.d(TAG, "VPN connected successfully.")
             registerNetworkCallback()
         } catch (e: Exception) {
-            Log.e(TAG, "startVpn failed: ${e.message}", e)
+            // بدون stack trace تا احتمال ثبت محتوای کانفیگ/آدرس سرور در لاگ کم شود.
+            Log.e(TAG, "startVpn failed: ${e.javaClass.simpleName}: ${e.message}")
             failStart(e.localizedMessage ?: e.javaClass.simpleName)
         } finally {
             isStarting = false

@@ -198,7 +198,8 @@ class MainActivity : FlutterActivity() {
                                 result.success(delayInt)
                             }
                         } catch (e: Exception) {
-                            android.util.Log.e("VelocePing", "testPing exception: ${e.message}", e)
+                            // فقط نوع/پیام استثنا لاگ می‌شود؛ محتوای کانفیگ یا آدرس سرور در لاگ نمی‌رود.
+                            android.util.Log.w("VelocePing", "testPing failed: ${e.javaClass.simpleName}: ${e.message}")
                             withContext(Dispatchers.Main) { result.success(null) }
                         } finally {
                             if (tempFile.exists()) tempFile.delete()
