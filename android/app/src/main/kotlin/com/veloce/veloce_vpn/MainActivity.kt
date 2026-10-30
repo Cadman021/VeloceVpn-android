@@ -90,6 +90,9 @@ class MainActivity : FlutterActivity() {
 
                     val prepareIntent = VpnService.prepare(this)
                     if (prepareIntent != null) {
+                        // اگر یک درخواست قبلی هنوز معلق مانده باشد، اول آن را رد کن تا
+                        // هیچ MethodChannel.Result برای همیشه بی‌پاسخ نماند.
+                        pendingResult?.success(false)
                         pendingResult = result
                         pendingXrayConfigJson = xrayConfigJson
                         pendingLocalSocksPort = localSocksPort
@@ -260,11 +263,21 @@ class MainActivity : FlutterActivity() {
 
             if (resultCode == RESULT_OK && json != null) {
                 startVpnService(json, port, splitEnabled, splitMode, selectedApps, excludedIps)
-                pendingResult?.let { awaitVpnResult(it) }
+                // pendingResult بالا null شد؛ باید از متغیر محلی استفاده شود، وگرنه
+                // نتیجه‌ی MethodChannel هرگز کامل نمی‌شود (اولین اتصال بی‌پاسخ می‌ماند).
+                result?.let { awaitVpnResult(it) }
             } else {
                 result?.success(false)
             }
         }
+    }
+
+    override fun onDestroy() {
+        // اگر اکتویتی پیش از بازگشت نتیجه‌ی مجوز VPN نابود شود، فراخوانی Dart نباید معلق بماند.
+        pendingResult?.success(false)
+        pendingResult = null
+        pendingXrayConfigJson = null
+        super.onDestroy()
     }
 
     private fun getInstalledAppsList(includeSystem: Boolean): List<Map<String, Any>> {
