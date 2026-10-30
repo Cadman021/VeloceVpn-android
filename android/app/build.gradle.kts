@@ -29,6 +29,11 @@ android {
         versionName = flutter.versionName
     }
 
+    buildFeatures {
+        // برای گارد کردن لاگ‌های دیباگ (BuildConfig.DEBUG) لازم است.
+        buildConfig = true
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

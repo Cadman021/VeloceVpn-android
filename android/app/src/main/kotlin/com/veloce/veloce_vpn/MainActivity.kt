@@ -144,9 +144,7 @@ class MainActivity : FlutterActivity() {
                                         "payload",
                                         JSONObject().apply {
                                             put("configs", JSONArray().put(JSONObject().put("configPath", tempFile.absolutePath)))
-                                            // واحد timeout دست libXray است (احتمالاً ثانیه)؛
-                                            // مقدار قبلی (4) مشکوک به رد شدن توسط حداقل مجاز lib است.
-                                            // TODO: بعد از دیدن لاگ VelocePing مقدار نهایی را تثبیت کن.
+                                            // واحد timeout دست libXray است (ثانیه).
                                             put("timeout", 10)
                                             put("url", "https://www.google.com/generate_204")
                                         },
@@ -154,8 +152,9 @@ class MainActivity : FlutterActivity() {
                                 }
 
                             val responseJson = LibXray.invoke(request.toString())
-                            // TODO-diagnostic: بعد از پیدا شدن علت، به Log.d تنزل بده یا حذف کن.
-                            android.util.Log.e("VelocePing", "pingBatch raw: $responseJson")
+                            if (BuildConfig.DEBUG) {
+                                android.util.Log.d("VelocePing", "pingBatch raw: $responseJson")
+                            }
                             val response = JSONObject(responseJson)
                             var delayMs: Long = -1
 
@@ -167,28 +166,35 @@ class MainActivity : FlutterActivity() {
                                     val itemSuccess = item.optBoolean("success", true)
                                     val itemError = item.optString("error", "")
                                     val rawDelay = item.opt("delay")
-                                    delayMs =
+                                    val delay =
                                         when (rawDelay) {
                                             is Number -> rawDelay.toLong()
                                             is String -> rawDelay.toLongOrNull() ?: -1L
                                             else -> -1L
                                         }
-                                    android.util.Log.e(
-                                        "VelocePing",
-                                        "item success=$itemSuccess delayRaw=$delayMs err=$itemError",
-                                    )
+                                    // libXray برای آیتم ناموفق success=false و delay=10000 (خطا)
+                                    // یا 11000 (تایم‌اوت) برمی‌گرداند؛ این‌ها تاخیر واقعی نیستند.
+                                    if (!itemSuccess || delay >= 10000L) {
+                                        if (BuildConfig.DEBUG) {
+                                            android.util.Log.d(
+                                                "VelocePing",
+                                                "ping item failed: success=$itemSuccess delay=$delay error=$itemError",
+                                            )
+                                        }
+                                    } else {
+                                        delayMs = delay
+                                    }
                                 }
-                            } else {
-                                android.util.Log.e(
+                            } else if (BuildConfig.DEBUG) {
+                                android.util.Log.d(
                                     "VelocePing",
                                     "pingBatch success=false err=${response.optString("error")}",
                                 )
                             }
 
-                            // سقف قبلی (9999) برداشته شد: اگر واحد delay میکروثانیه/نانوثانیه
-                            // باشد، فیلتر قبلی همه‌ی نتایج سالم را دور می‌ریخت.
                             val delayInt = delayMs.takeIf { it >= 1L }?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt()
                             withContext(Dispatchers.Main) {
+                                // null یعنی سرور در دسترس نیست (Dart آن را unreachable نشان می‌دهد).
                                 result.success(delayInt)
                             }
                         } catch (e: Exception) {
