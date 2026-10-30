@@ -90,12 +90,52 @@ class _HomeScreenState extends State<HomeScreen>
         if (res == true && mounted) {
           final splitController = context.read<SplitTunnelingController>();
           await context.read<VpnController>().connect(splitController);
+          _showConnectError();
         }
       } else {
         final splitController = context.read<SplitTunnelingController>();
         await context.read<VpnController>().connect(splitController);
+        _showConnectError();
       }
     }
+  }
+
+  /// خطای آخرین تلاش اتصال را به‌صورت SnackBar نشان می‌دهد و پاک می‌کند.
+  void _showConnectError() {
+    if (!mounted) return;
+    final vpn = context.read<VpnController>();
+    final kind = vpn.lastErrorKind;
+    if (kind == null) return;
+
+    final t = context.read<I18n>();
+    final String message;
+    switch (kind) {
+      case VpnErrorKind.configFailed:
+        message = t.t('errConfigFailed');
+        break;
+      case VpnErrorKind.permissionDenied:
+        message = t.t('errPermissionDenied');
+        break;
+      case VpnErrorKind.startFailed:
+        final reason = (vpn.lastErrorDetail ?? '').trim();
+        message = reason.isEmpty
+            ? t.t('errStartFailed')
+            : '${t.t('errStartFailed')} ($reason)';
+        break;
+      case VpnErrorKind.unknown:
+        message = t.t('errUnknown');
+        break;
+    }
+    vpn.clearError();
+
+    final colors = context.read<ThemeController>().colors;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message, style: TextStyle(color: colors.text)),
+        backgroundColor: colors.bgElevated,
+        behavior: SnackBarBehavior.floating,
+      ));
   }
 
   @override

@@ -54,6 +54,9 @@ class NativeVpnBridge {
 
 enum ConnStatus { disconnected, connecting, connected, reconnecting }
 
+/// نوع خطای قابل نمایش به کاربر در مرحله‌ی اتصال.
+enum VpnErrorKind { configFailed, permissionDenied, startFailed, unknown }
+
 class VpnController extends ChangeNotifier {
   final NativeVpnBridge bridge = NativeVpnBridge();
   final ApiService api = ApiService();
@@ -62,6 +65,12 @@ class VpnController extends ChangeNotifier {
   SelectedLocationMeta? selectedMeta;
   bool adblockOn = false;
   DateTime? connectedAt;
+
+  /// آخرین خطای اتصال برای نمایش در UI (null یعنی خطایی نیست).
+  VpnErrorKind? lastErrorKind;
+
+  /// پیام اختیاری از لایه‌ی ناتیو (مثلاً دلیل شکست Xray).
+  String? lastErrorDetail;
 
   List<CountryGroup> cachedLocations = [];
   bool isLocationsLoaded = false;
@@ -190,12 +199,23 @@ class VpnController extends ChangeNotifier {
   Future<bool> connect(SplitTunnelingController splitController) async {
     if (selectedMeta == null) return false;
 
+    lastErrorKind = null;
+    lastErrorDetail = null;
+
     status = ConnStatus.connecting;
     _statusController.add(status);
     notifyListeners();
 
     try {
-      final xrayConfig = await api.fetchXrayConfig(selectedMeta!.id, adblock: adblockOn);
+      final Map<String, dynamic> xrayConfig;
+      try {
+        xrayConfig = await api.fetchXrayConfig(selectedMeta!.id, adblock: adblockOn);
+      } catch (e) {
+        debugPrint('[Connect] config download failed: $e');
+        _fail(VpnErrorKind.configFailed, null);
+        return false;
+      }
+
       final ok = await bridge.start(
         xrayConfig: xrayConfig,
         localSocksPort: _localSocksPort,
@@ -208,17 +228,46 @@ class VpnController extends ChangeNotifier {
         status = ConnStatus.connected;
         connectedAt = DateTime.now();
         await _recordRecent(selectedMeta!);
+        lastErrorKind = null;
+        lastErrorDetail = null;
       } else {
-        status = ConnStatus.disconnected;
+        // کاربر مجوز VPN را رد کرده است (ناتیو در این حالت false برمی‌گرداند).
+        _fail(VpnErrorKind.permissionDenied, null);
+        return false;
       }
+    } on PlatformException catch (e) {
+      debugPrint('[Connect] native error ${e.code}: ${e.message}');
+      _fail(
+        e.code == 'vpn_start_failed' ? VpnErrorKind.startFailed : VpnErrorKind.unknown,
+        e.message,
+      );
+      return false;
     } catch (e) {
       debugPrint('[Connect Error]: $e');
-      status = ConnStatus.disconnected;
+      _fail(VpnErrorKind.unknown, null);
+      return false;
     }
 
     _statusController.add(status);
     notifyListeners();
     return status == ConnStatus.connected;
+  }
+
+  void _fail(VpnErrorKind kind, String? detail) {
+    lastErrorKind = kind;
+    lastErrorDetail = detail;
+    status = ConnStatus.disconnected;
+    connectedAt = null;
+    _statusController.add(status);
+    notifyListeners();
+  }
+
+  /// پاک کردن خطای نمایش‌داده‌شده (بعد از نمایش SnackBar).
+  void clearError() {
+    if (lastErrorKind == null) return;
+    lastErrorKind = null;
+    lastErrorDetail = null;
+    notifyListeners();
   }
 
   Future<void> disconnect() async {
