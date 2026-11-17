@@ -1,6 +1,9 @@
-package com.veloce.veloce_vpn
+package com.cadman.veloce
 
-import android.app.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -9,6 +12,8 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -17,19 +22,27 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class VeloceVpnService : VpnService() {
     companion object {
-        const val ACTION_START = "com.veloce.veloce_vpn.START"
-        const val ACTION_STOP = "com.veloce.veloce_vpn.STOP"
+        const val ACTION_START = "com.cadman.veloce.START"
+        const val ACTION_STOP = "com.cadman.veloce.STOP"
         const val EXTRA_XRAY_CONFIG_JSON = "xray_config_json"
         const val EXTRA_LOCAL_SOCKS_PORT = "local_socks_port"
+        const val EXTRA_START_TOKEN = "start_token"
         const val CHANNEL_ID = "veloce_vpn_channel"
         const val NOTIFICATION_ID = 1001
+
         private const val TAG = "VeloceVpn"
-        private const val METRICS_PORT = 49227
         private const val XRAY_CONFIG_FILE_NAME = "xray_config.json"
+        private const val TUN_MTU = 1400
+        private const val TUN_IPV4_ADDRESS = "172.19.0.1"
+        private const val TUN_IPV4_PREFIX = 28
+        private const val TUN_IPV6_ADDRESS = "fdfe:dcba:9876::1"
+        private const val TUN_IPV6_PREFIX = 126
 
         // این پرچم‌ها از ترد/اکتیویتی دیگری خوانده می‌شوند (awaitVpnResult، کاشی Quick Settings).
         @Volatile
@@ -42,6 +55,11 @@ class VeloceVpnService : VpnService() {
 
         @Volatile
         var lastError: String? = null
+            private set
+
+        /** توکن آخرین درخواست start که سرویس واقعاً دریافت کرده است. */
+        @Volatile
+        var lastHandledStartToken: String? = null
             private set
     }
 
@@ -57,14 +75,27 @@ class VeloceVpnService : VpnService() {
     private val xrayStarted = AtomicBoolean(false)
     private val stopRequested = AtomicBoolean(false)
 
+    // هر start/stop یک نسل جدید است؛ نتیجه‌ی یک start قدیمی نباید روی
+    // اتصال جدید اثر بگذارد.
+    private val generation = AtomicLong(0L)
+
     // startForeground باید فقط یک‌بار per-service-instance فراخوانی شود.
     private var foregroundStarted = false
 
     @Synchronized
-    private fun markStarting(): Boolean {
+    private fun markStarting(token: String): Boolean {
+        lastHandledStartToken = token
         if (isStarting) return false
         isStarting = true
+        lastError = null
         return true
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        // اگر پروسه قبلاً وسط نوشتن کانفیگ کشته شده باشد، فایل حاوی
+        // اعتبارنامه‌ها نباید روی دیسک بماند.
+        File(noBackupFilesDir, XRAY_CONFIG_FILE_NAME).delete()
     }
 
     override fun onStartCommand(
@@ -79,30 +110,46 @@ class VeloceVpnService : VpnService() {
                 val splitMode = intent.getStringExtra("split_mode") ?: "exclusive"
                 val selectedApps = intent.getStringArrayListExtra("selected_apps") ?: arrayListOf()
                 val excludedIpsDomains = intent.getStringArrayListExtra("excluded_ips") ?: arrayListOf()
+                val startToken = intent.getStringExtra(EXTRA_START_TOKEN) ?: "legacy-${System.currentTimeMillis()}"
 
                 if (xrayConfigJson == null) {
+                    lastHandledStartToken = startToken
+                    lastError = "missing_config"
                     Log.w(TAG, "ACTION_START without config, ignoring")
-                } else if (markStarting()) {
-                    // سرویس ممکن است با startForegroundService() (از کاشی) اجرا شده باشد؛
-                    // در این حالت باید ظرف ~۵ ثانیه startForeground صدا زده شود، وگرنه
-                    // سیستم با ForegroundServiceDidNotStartInTimeException کرش می‌کند.
-                    promoteToForeground()
-                    worker.execute { startVpn(xrayConfigJson, splitEnabled, splitMode, selectedApps, excludedIpsDomains) }
+                    promoteToForeground(getString(R.string.vpn_connecting))
+                    requestStop()
                 } else {
-                    Log.d(TAG, "start already in progress, ignoring duplicate ACTION_START")
+                    if (markStarting(startToken)) {
+                        val startGeneration = generation.incrementAndGet()
+                        // سرویس ممکن است با startForegroundService() (از کاشی) اجرا شده باشد؛
+                        // در این حالت باید ظرف ~۵ ثانیه startForeground صدا زده شود، وگرنه
+                        // سیستم با ForegroundServiceDidNotStartInTimeException کرش می‌کند.
+                        promoteToForeground(getString(R.string.vpn_connecting))
+                        worker.execute {
+                            startVpn(
+                                xrayConfigJson,
+                                splitEnabled,
+                                splitMode,
+                                selectedApps,
+                                excludedIpsDomains,
+                                startGeneration,
+                            )
+                        }
+                    } else {
+                        Log.d(TAG, "start already in progress, ignoring duplicate ACTION_START")
+                    }
                 }
             }
 
             ACTION_STOP -> {
-                stopVpn()
+                requestStop()
             }
 
             else -> {
                 // ری‌استارت توسط سیستم (intent == null): بدون دستور مشخص نمی‌توان
                 // تونل را ادامه داد، پس سرویس را می‌بندیم تا UI وضعیت اشتباه نشان ندهد.
                 Log.d(TAG, "onStartCommand with no action (restart?), stopping")
-                resetState()
-                stopForegroundAndSelf()
+                requestStop()
             }
         }
         return START_NOT_STICKY
@@ -114,21 +161,35 @@ class VeloceVpnService : VpnService() {
         splitMode: String,
         selectedApps: List<String>,
         excludedIpsDomains: List<String>,
+        startGeneration: Long,
     ) {
         try {
-            if (isRunning) stopXrayProcess()
-            lastError = null
-            xrayStarted.set(false)
+            if (generation.get() != startGeneration) return
+
+            // A new start while a tunnel is already up must release the old
+            // descriptor/callback before opening a new one.
+            isRunning = false
+            cleanupTunnel()
             stopRequested.set(false)
 
             val builder =
                 Builder()
                     .setSession("Veloce VPN")
-                    .setMtu(1400)
-                    .addAddress("172.19.0.1", 28)
+                    .setMtu(TUN_MTU)
+                    .addAddress(TUN_IPV4_ADDRESS, TUN_IPV4_PREFIX)
+                    // Without an IPv6 address/route the system happily sends
+                    // IPv6 traffic outside the VPN (a real leak on dual-stack
+                    // networks). Route it into Xray as well.
+                    .addAddress(TUN_IPV6_ADDRESS, TUN_IPV6_PREFIX)
                     .addRoute("0.0.0.0", 0)
+                    .addRoute("::", 0)
                     .addDnsServer("1.1.1.1")
                     .addDnsServer("8.8.8.8")
+                    .addDnsServer("2606:4700:4700::1111")
+                    .addDnsServer("2001:4860:4860::8888")
+                    // A VPN does not necessarily make the underlying Wi-Fi
+                    // metered; don't make Android treat it that way.
+                    .setMetered(false)
 
             // ۱. مدیریت Split Tunneling برای اپلیکیشن‌ها
             if (splitEnabled) {
@@ -160,10 +221,15 @@ class VeloceVpnService : VpnService() {
 
             val fd = builder.establish()
             if (fd == null) {
-                failStart("VpnService establish() returned null.")
+                failStart("VpnService establish() returned null.", startGeneration)
                 return
             }
             tunFd = fd
+
+            if (generation.get() != startGeneration) {
+                cleanupTunnel()
+                return
+            }
 
             // ۲. ساخت و تزریق کانفیگ Xray
             val xrayConfig = JSONObject(xrayConfigJsonRaw)
@@ -180,21 +246,26 @@ class VeloceVpnService : VpnService() {
 
                 for (item in excludedIpsDomains) {
                     val trimmed = item.trim()
-                    if (trimmed.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}(/\\d{1,2})?$"))) {
+                    if (trimmed.isEmpty()) continue
+                    if (trimmed.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}(/\\d{1,2})?$")) ||
+                        (trimmed.contains(":") && trimmed.matches(Regex("^[0-9a-fA-F:]+$")))
+                    ) {
                         ipArray.put(trimmed)
                     } else {
                         domainArray.put(trimmed)
                     }
                 }
 
-                finalRules.put(
-                    JSONObject().apply {
-                        put("type", "field")
-                        if (domainArray.length() > 0) put("domain", domainArray)
-                        if (ipArray.length() > 0) put("ip", ipArray)
-                        put("outboundTag", "direct")
-                    }
-                )
+                if (domainArray.length() > 0 || ipArray.length() > 0) {
+                    finalRules.put(
+                        JSONObject().apply {
+                            put("type", "field")
+                            if (domainArray.length() > 0) put("domain", domainArray)
+                            if (ipArray.length() > 0) put("ip", ipArray)
+                            put("outboundTag", "direct")
+                        },
+                    )
+                }
             }
 
             // rule های اصلی سرور (adblock و غیره) رو حفظ کن
@@ -233,7 +304,7 @@ class VeloceVpnService : VpnService() {
                         "settings",
                         JSONObject().apply {
                             put("name", "tun0")
-                            put("mtu", 1400)
+                            put("mtu", TUN_MTU)
                         },
                     )
                     put(
@@ -261,23 +332,27 @@ class VeloceVpnService : VpnService() {
             }
             xrayConfig.put("outbounds", outbounds)
 
-            xrayConfig.put("dns", JSONObject().put("servers", JSONArray().put("https://1.1.1.1/dns-query").put("1.1.1.1")))
-            xrayConfig.put("stats", JSONObject())
             xrayConfig.put(
-                "policy",
+                "dns",
                 JSONObject().put(
-                    "system",
-                    JSONObject().apply {
-                        put("statsInboundDownlink", true)
-                        put("statsInboundUplink", true)
-                    },
+                    "servers",
+                    JSONArray()
+                        .put("https://1.1.1.1/dns-query")
+                        .put("https://[2606:4700:4700::1111]/dns-query")
+                        .put("1.1.1.1")
+                        .put("2606:4700:4700::1111"),
                 ),
             )
-            xrayConfig.put("metrics", JSONObject().put("listen", "127.0.0.1:$METRICS_PORT"))
 
-            val file = File(filesDir, XRAY_CONFIG_FILE_NAME)
+            val file = File(noBackupFilesDir, XRAY_CONFIG_FILE_NAME)
+            if (file.exists()) file.delete()
             file.writeText(xrayConfig.toString())
             configFile = file
+
+            if (generation.get() != startGeneration) {
+                cleanupTunnel()
+                return
+            }
 
             // ۳. اجرای LibXray
             val request =
@@ -292,56 +367,55 @@ class VeloceVpnService : VpnService() {
             if (!response.optBoolean("success", false)) {
                 val reason = response.optString("error", "unknown_error")
                 Log.w(TAG, "runXray failed: $reason")
-                failStart(reason)
+                failStart(reason, startGeneration)
                 return
             }
 
-            if (stopRequested.get()) {
+            if (stopRequested.get() || generation.get() != startGeneration) {
                 // کاربر حین بالا آمدن تونل قطع کرده است؛ نتیجه را نادیده بگیر.
                 Log.d(TAG, "stop requested during startup, aborting")
-                failStart("stopped")
+                failStart("stopped", startGeneration)
                 return
             }
 
             // ۴. سرویس پیش‌زمینه از قبل بالا آمده؛ فقط وضعیت را تایید می‌کنیم.
-            promoteToForeground()
             isRunning = true
+            updateNotification(getString(R.string.vpn_connected))
             Log.d(TAG, "VPN connected successfully.")
             registerNetworkCallback()
         } catch (e: Exception) {
             // بدون stack trace تا احتمال ثبت محتوای کانفیگ/آدرس سرور در لاگ کم شود.
             Log.e(TAG, "startVpn failed: ${e.javaClass.simpleName}: ${e.message}")
-            failStart(e.localizedMessage ?: e.javaClass.simpleName)
+            failStart(e.localizedMessage ?: e.javaClass.simpleName, startGeneration)
         } finally {
-            isStarting = false
+            if (generation.get() == startGeneration) {
+                isStarting = false
+            }
         }
     }
 
     /**
      * مسیر مشترک شکست در بالا آمدن تونل: پیام خوانا برای Dart، آزادسازی fd و بستن سرویس.
      */
-    private fun failStart(message: String) {
+    private fun failStart(
+        message: String,
+        startGeneration: Long,
+    ) {
+        if (generation.get() != startGeneration) return
         lastError = message
         isRunning = false
-        if (xrayStarted.getAndSet(false)) {
-            try {
-                LibXray.invoke(
-                    JSONObject().put("apiVersion", 1).put("method", "stopXray").put("payload", JSONObject()).toString(),
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "stopXray after failure failed: ${e.message}")
-            }
-        }
-        closeTunFd()
-        clearConfigFile()
+        cleanupTunnel()
         isStarting = false
         stopForegroundAndSelf()
     }
 
-    private fun promoteToForeground() {
-        if (foregroundStarted) return
+    private fun promoteToForeground(text: String) {
+        if (foregroundStarted) {
+            updateNotification(text)
+            return
+        }
         createNotificationChannel()
-        val notification = buildNotification()
+        val notification = buildNotification(text)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -355,17 +429,26 @@ class VeloceVpnService : VpnService() {
         foregroundStarted = true
     }
 
+    private fun updateNotification(text: String) {
+        if (!foregroundStarted) return
+        val notification = buildNotification(text)
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, notification)
+    }
+
     private fun stopForegroundAndSelf() {
-        if (foregroundStarted) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
+        Handler(Looper.getMainLooper()).post {
+            if (foregroundStarted) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+                foregroundStarted = false
             }
-            foregroundStarted = false
+            stopSelf()
         }
-        stopSelf()
     }
 
     private fun closeTunFd() {
@@ -383,21 +466,18 @@ class VeloceVpnService : VpnService() {
     private fun clearConfigFile() {
         try {
             configFile?.delete()
-            File(filesDir, XRAY_CONFIG_FILE_NAME).delete()
+            File(noBackupFilesDir, XRAY_CONFIG_FILE_NAME).delete()
         } catch (e: Exception) {
             Log.w(TAG, "deleting config file failed: ${e.message}")
         }
         configFile = null
     }
 
-    private fun resetState() {
-        isRunning = false
-        isStarting = false
-    }
-
     private fun registerNetworkCallback() {
+        unregisterNetworkCallback()
         try {
-            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivityManager = manager
             val request =
                 NetworkRequest
                     .Builder()
@@ -414,11 +494,33 @@ class VeloceVpnService : VpnService() {
                             }
                         }
                     }
+
+                    override fun onLost(network: Network) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            try {
+                                // Fall back to the system default set of
+                                // underlying networks. Without this, a
+                                // Wi-Fi -> mobile handover can leave the
+                                // tunnel bound to a dead network.
+                                setUnderlyingNetworks(null)
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }
                 }
-            connectivityManager?.registerNetworkCallback(request, networkCallback!!)
+            manager.registerNetworkCallback(request, networkCallback!!)
         } catch (e: Exception) {
             Log.w(TAG, "NetworkCallback registration warning: ${e.message}")
         }
+    }
+
+    private fun unregisterNetworkCallback() {
+        try {
+            networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "unregisterNetworkCallback failed: ${e.message}")
+        }
+        networkCallback = null
     }
 
     /**
@@ -435,21 +537,38 @@ class VeloceVpnService : VpnService() {
         }
     }
 
-    @Synchronized
-    private fun stopVpn() {
-        stopRequested.set(true)
+    private fun cleanupTunnel() {
         stopXrayProcess()
-
-        try {
-            networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
-        } catch (e: Exception) {
-            Log.w(TAG, "unregisterNetworkCallback failed: ${e.message}")
-        }
-        networkCallback = null
-
+        unregisterNetworkCallback()
         closeTunFd()
         clearConfigFile()
-        resetState()
+    }
+
+    /**
+     * توقف کامل روی worker انجام می‌شود تا LibXray.invoke باعث ANR روی
+     * main thread نشود. generation جدید باعث می‌شود start در حال اجرا
+     * نتیجه‌اش را نادیده بگیرد.
+     */
+    private fun requestStop() {
+        generation.incrementAndGet()
+        stopRequested.set(true)
+        try {
+            worker.execute { stopVpnInternal() }
+        } catch (_: RejectedExecutionException) {
+            // Service is already being destroyed; cleanup is best-effort.
+            stopVpnInternal()
+        }
+    }
+
+    private fun stopVpnInternal() {
+        stopXrayProcess()
+        unregisterNetworkCallback()
+        closeTunFd()
+        clearConfigFile()
+        isRunning = false
+        isStarting = false
+        // Do not clear lastError here: failStart() calls stopSelf(), and
+        // MainActivity still needs the reason to report to Flutter.
         stopForegroundAndSelf()
     }
 
@@ -458,10 +577,10 @@ class VeloceVpnService : VpnService() {
             val channel =
                 NotificationChannel(
                     CHANNEL_ID,
-                    "Veloce VPN Status",
+                    getString(R.string.notification_channel_name),
                     NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "Shows active VPN status and controls"
+                    description = getString(R.string.notification_channel_description)
                     setShowBadge(false)
                 }
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -469,7 +588,7 @@ class VeloceVpnService : VpnService() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(text: String): Notification {
         val contentIntent =
             Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -496,26 +615,27 @@ class VeloceVpnService : VpnService() {
 
         return NotificationCompat
             .Builder(this, CHANNEL_ID)
-            .setContentTitle("Veloce VPN")
-            .setContentText("اتصال برقرار است | Protected")
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_stat_veloce)
             .setContentIntent(contentPendingIntent)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
-                "قطع اتصال",
+                getString(R.string.disconnect),
                 stopPendingIntent,
             ).build()
     }
 
     override fun onRevoke() {
-        stopVpn()
+        requestStop()
         super.onRevoke()
     }
 
     override fun onDestroy() {
-        stopVpn()
+        requestStop()
         worker.shutdown()
         super.onDestroy()
     }

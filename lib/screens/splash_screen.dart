@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../controllers/vpn_controller.dart';
+import '../theme/theme_controller.dart';
 import 'home_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -10,23 +12,24 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
-  late AnimationController _animController;
-
+class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _animController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat();
     _bootstrap();
   }
 
   Future<void> _bootstrap() async {
     final vpn = context.read<VpnController>();
-    
-    // پیش‌بارگذاری لوکیشن‌ها همزمان با انیمیشن ورود
+
+    // Do not hold the splash screen hostage to a slow/blocked network. The
+    // preload keeps running in the background and Home/Locations update when
+    // it finishes (or show the offline cache/retry state).
     await Future.wait([
-      vpn.preloadLocations(),
-      Future.delayed(const Duration(milliseconds: 1200)),
+      Future<void>.delayed(const Duration(milliseconds: 800)),
+      vpn
+          .preloadLocations()
+          .timeout(const Duration(seconds: 2), onTimeout: () => false),
     ]);
 
     if (mounted) {
@@ -34,32 +37,28 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 400),
           pageBuilder: (_, __, ___) => const HomeScreen(),
-          transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
+          transitionsBuilder: (_, animation, __, child) =>
+              FadeTransition(opacity: animation, child: child),
         ),
       );
     }
   }
 
   @override
-  void dispose() {
-    _animController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final colors = context.watch<ThemeController>().colors;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF16171B), // رنگ پس‌زمینه لودینگ (مشابه طراحی Veloce)
+      backgroundColor: colors.bg,
       body: SafeArea(
         child: Stack(
           children: [
             Center(
-              // فراخوانی تصویر لوگوی اختصاصی شما
               child: Image.asset(
                 'assets/images/logo.png',
-                width: 140, // عرض لوگو
-                height: 140, // ارتفاع لوگو
-                fit: BoxFit.contain, // حفظ تناسب ابعاد تصویر
+                width: 140,
+                height: 140,
+                fit: BoxFit.contain,
               ),
             ),
             Positioned(
@@ -68,10 +67,10 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
               right: 40,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(4),
-                child: const LinearProgressIndicator(
+                child: LinearProgressIndicator(
                   minHeight: 3,
-                  backgroundColor: Color(0xFF232630),
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2563EB)),
+                  backgroundColor: colors.border,
+                  valueColor: AlwaysStoppedAnimation<Color>(colors.accent),
                 ),
               ),
             ),

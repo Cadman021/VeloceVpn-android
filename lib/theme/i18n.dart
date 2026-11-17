@@ -62,6 +62,7 @@ const Map<String, Map<String, String>> _strings = {
     'ipExclusionsDesc':
         'Exclude IPs, ranges, or hostnames from the VPN tunnel.',
     'ipHint': 'e.g. 192.168.1.1 or imgur.com',
+    'invalidIp': 'Enter a valid IPv4/IPv6 address, range, or domain.',
     'import': 'Import',
     'deleteAll': 'Delete All',
     'noExcludedIps': 'No excluded IPs or domains',
@@ -71,6 +72,20 @@ const Map<String, Map<String, String>> _strings = {
     'apps': 'APPS',
     'showSystemApps': 'Show system apps',
     'searchApps': 'Search apps...',
+    'licenses': 'Open-source licenses',
+    'sourceCode': 'Source code',
+    'pingFirst': 'Tap the lightning icon to test servers first.',
+    'disabled': 'Disabled',
+    'connect': 'Connect',
+    'disconnect': 'Disconnect',
+    'adblockUnavailable':
+        'Ad-block is not available for this server; connected without it.',
+    'retry': 'Retry',
+    'staleData': 'Showing the offline server list. Retry to refresh.',
+    'reconnectToApply': 'Reconnect to apply changes.',
+    'reconnect': 'Reconnect',
+    'errEmptyInclusive':
+        'Select at least one app for inclusive mode, or turn off split tunneling.',
   },
   'fa': {
     'appTitle': 'Veloce VPN',
@@ -118,6 +133,7 @@ const Map<String, Map<String, String>> _strings = {
     'ipExclusionsDesc':
         'آدرس‌های IP یا دامنه‌هایی که می‌خواهید از تونل VPN عبور نکنند را وارد کنید.',
     'ipHint': 'مثلاً 192.168.1.1 یا example.com',
+    'invalidIp': 'یک آدرس IPv4/IPv6، محدوده یا دامنه معتبر وارد کنید.',
     'import': 'ورود فایل',
     'deleteAll': 'حذف همه',
     'noExcludedIps': 'هیچ IP یا دامنه‌ای استثنا نشده است',
@@ -127,6 +143,20 @@ const Map<String, Map<String, String>> _strings = {
     'apps': 'برنامه‌ها',
     'showSystemApps': 'نمایش برنامه‌های سیستمی',
     'searchApps': 'جستجوی برنامه‌ها...',
+    'licenses': 'لایسنس‌های متن‌باز',
+    'sourceCode': 'کد منبع',
+    'pingFirst': 'ابتدا با آیکون صاعقه سرورها را تست کنید.',
+    'disabled': 'غیرفعال',
+    'connect': 'اتصال',
+    'disconnect': 'قطع اتصال',
+    'adblockUnavailable':
+        'مسدودساز تبلیغات برای این سرور در دسترس نیست؛ بدون آن متصل شدید.',
+    'retry': 'تلاش دوباره',
+    'staleData': 'لیست آفلاین سرورها نمایش داده می‌شود. برای به‌روزرسانی دوباره تلاش کنید.',
+    'reconnectToApply': 'برای اعمال تغییرات دوباره وصل شوید.',
+    'reconnect': 'اتصال دوباره',
+    'errEmptyInclusive':
+        'برای حالت «فقط از VPN» حداقل یک برنامه انتخاب کنید یا تونل‌بندی برنامه‌ها را خاموش کنید.',
   },
   'fr': {
     'appTitle': 'Veloce VPN',
@@ -168,6 +198,7 @@ const Map<String, Map<String, String>> _strings = {
     'ipExclusionsTitle': 'Exclusions IP et nom d\'hôte',
     'ipExclusionsDesc': 'Exclure des IP, plages ou noms d\'hôte du tunnel VPN.',
     'ipHint': 'ex: 192.168.1.1 ou exemple.com',
+    'invalidIp': 'Saisissez une adresse IPv4/IPv6, une plage ou un domaine valide.',
     'import': 'Importer',
     'deleteAll': 'Tout supprimer',
     'noExcludedIps': 'Aucune IP ou domaine exclu',
@@ -177,6 +208,26 @@ const Map<String, Map<String, String>> _strings = {
     'apps': 'APPLICATIONS',
     'showSystemApps': 'Afficher les apps système',
     'searchApps': 'Rechercher des applications...',
+    'licenses': 'Licences open source',
+    'sourceCode': 'Code source',
+    'pingFirst': 'Testez d’abord les serveurs avec l’icône éclair.',
+    'disabled': 'Désactivé',
+    'connect': 'Connecter',
+    'disconnect': 'Déconnecter',
+    'adblockUnavailable':
+        'Le blocage de publicités n’est pas disponible pour ce serveur ; connexion sans celui-ci.',
+    'retry': 'Réessayer',
+    'staleData': 'Liste hors ligne. Réessayez pour actualiser.',
+    'reconnectToApply': 'Reconnectez-vous pour appliquer les modifications.',
+    'reconnect': 'Reconnecter',
+    'errEmptyInclusive':
+        'Sélectionnez au moins une application pour le mode inclusif, ou désactivez le split tunneling.',
+    'errConfigFailed':
+        'Impossible de télécharger la configuration du serveur. Vérifiez votre connexion.',
+    'errPermissionDenied':
+        'L’autorisation VPN n’a pas été accordée. Autorisez-la pour vous connecter.',
+    'errStartFailed': 'Impossible de démarrer le VPN.',
+    'errUnknown': 'Une erreur est survenue pendant la connexion. Réessayez.',
   },
   'zh': {
     'appTitle': 'Veloce VPN',
@@ -218,6 +269,7 @@ const Map<String, Map<String, String>> _strings = {
     'ipExclusionsTitle': 'IP 与域名排除',
     'ipExclusionsDesc': '从 VPN 隧道中排除 IP、IP 段或域名。',
     'ipHint': '例如 192.168.1.1 或 example.com',
+    'invalidIp': '请输入有效的 IPv4/IPv6 地址、范围或域名。',
     'import': '导入',
     'deleteAll': '全部删除',
     'noExcludedIps': '暂无排除的 IP 或域名',
@@ -227,6 +279,22 @@ const Map<String, Map<String, String>> _strings = {
     'apps': '应用列表',
     'showSystemApps': '显示系统应用',
     'searchApps': '搜索应用...',
+    'licenses': '开源许可证',
+    'sourceCode': '源代码',
+    'pingFirst': '请先点击闪电图标测试服务器。',
+    'disabled': '已禁用',
+    'connect': '连接',
+    'disconnect': '断开',
+    'adblockUnavailable': '此服务器没有广告拦截配置，已使用普通配置连接。',
+    'retry': '重试',
+    'staleData': '正在显示离线服务器列表。请重试。',
+    'reconnectToApply': '重新连接以应用更改。',
+    'reconnect': '重新连接',
+    'errEmptyInclusive': '包含模式至少选择一个应用，或关闭应用分流。',
+    'errConfigFailed': '无法下载服务器配置。请检查网络连接后重试。',
+    'errPermissionDenied': '未授予 VPN 权限。请允许后连接。',
+    'errStartFailed': '无法启动 VPN。',
+    'errUnknown': '连接时出错。请重试。',
   },
   'ru': {
     'appTitle': 'Veloce VPN',
@@ -268,6 +336,7 @@ const Map<String, Map<String, String>> _strings = {
     'ipExclusionsTitle': 'Исключения IP и доменов',
     'ipExclusionsDesc': 'Исключить IP, диапазоны или домены из туннеля VPN.',
     'ipHint': 'напр. 192.168.1.1 или example.com',
+    'invalidIp': 'Введите корректный адрес IPv4/IPv6, диапазон или домен.',
     'import': 'Импорт',
     'deleteAll': 'Удалить всё',
     'noExcludedIps': 'Нет исключённых IP или доменов',
@@ -277,6 +346,26 @@ const Map<String, Map<String, String>> _strings = {
     'apps': 'ПРИЛОЖЕНИЯ',
     'showSystemApps': 'Показывать системные',
     'searchApps': 'Поиск приложений...',
+    'licenses': 'Лицензии открытого ПО',
+    'sourceCode': 'Исходный код',
+    'pingFirst': 'Сначала проверьте серверы кнопкой молнии.',
+    'disabled': 'Отключено',
+    'connect': 'Подключить',
+    'disconnect': 'Отключить',
+    'adblockUnavailable':
+        'Блокировка рекламы недоступна для этого сервера; подключение выполнено без неё.',
+    'retry': 'Повторить',
+    'staleData': 'Показан офлайн-список серверов. Повторите попытку.',
+    'reconnectToApply': 'Переподключитесь, чтобы применить изменения.',
+    'reconnect': 'Переподключить',
+    'errEmptyInclusive':
+        'Выберите хотя бы одно приложение для режима «только через VPN» или отключите раздельное туннелирование.',
+    'errConfigFailed':
+        'Не удалось загрузить конфигурацию сервера. Проверьте соединение.',
+    'errPermissionDenied':
+        'Разрешение VPN не выдано. Разрешите его для подключения.',
+    'errStartFailed': 'Не удалось запустить VPN.',
+    'errUnknown': 'Ошибка при подключении. Повторите попытку.',
   },
 };
 
@@ -286,18 +375,33 @@ class I18n extends ChangeNotifier {
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    _lang = prefs.getString('language') ?? 'en';
+    final saved = prefs.getString('language');
+    if (saved != null && _isSupported(saved)) {
+      _lang = saved;
+    } else {
+      final systemLang = PlatformDispatcher.instance.locale.languageCode;
+      _lang = _isSupported(systemLang) ? systemLang : 'en';
+    }
     notifyListeners();
   }
 
   Future<void> setLang(String code) async {
+    if (!_isSupported(code)) return;
     _lang = code;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('language', code);
     notifyListeners();
   }
 
+  static bool _isSupported(String code) =>
+      kLanguages.any((l) => l.code == code);
+
   String t(String key) => _strings[_lang]?[key] ?? _strings['en']![key] ?? key;
+
+  /// Used by tests to assert that every language has the same key set.
+  @visibleForTesting
+  Set<String> keysFor(String lang) =>
+      ((_strings[lang] ?? const <String, String>{}).keys).toSet();
 
   TextDirection get dir => kLanguages
       .firstWhere((l) => l.code == _lang, orElse: () => kLanguages[0])

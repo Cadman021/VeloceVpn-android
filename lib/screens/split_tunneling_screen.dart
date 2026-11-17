@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../controllers/split_tunneling_controller.dart';
+import '../controllers/vpn_controller.dart';
 import '../theme/app_theme.dart';
 import '../theme/i18n.dart';
 import 'ip_exclusions_screen.dart';
@@ -45,10 +46,7 @@ class _SplitTunnelingScreenState extends State<SplitTunnelingScreen> {
           i18n.t('splitTunneling'),
           style: TextStyle(color: c.text, fontWeight: FontWeight.bold),
         ),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios, color: c.text),
-          onPressed: () => Navigator.pop(context),
-        ),
+        leading: BackButton(color: c.text),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -80,7 +78,10 @@ class _SplitTunnelingScreenState extends State<SplitTunnelingScreen> {
                       ),
                       Switch(
                         value: controller.isEnabled,
-                        onChanged: controller.toggleEnabled,
+                        onChanged: (value) {
+                          controller.toggleEnabled(value);
+                          context.read<VpnController>().markSettingsChanged();
+                        },
                         activeThumbColor: c.accent,
                       ),
                     ],
@@ -90,6 +91,15 @@ class _SplitTunnelingScreenState extends State<SplitTunnelingScreen> {
                     i18n.t('splitTunnelingDesc'),
                     style: TextStyle(color: c.textSecondary, fontSize: 12),
                   ),
+                  if (controller.isEnabled &&
+                      controller.mode == 'inclusive' &&
+                      controller.selectedPackages.isEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      i18n.t('errEmptyInclusive'),
+                      style: TextStyle(color: c.danger, fontSize: 12),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -122,7 +132,10 @@ class _SplitTunnelingScreenState extends State<SplitTunnelingScreen> {
                       ),
                     ],
                     onChanged: (val) {
-                      if (val != null) controller.setMode(val);
+                      if (val != null) {
+                        controller.setMode(val);
+                        context.read<VpnController>().markSettingsChanged();
+                      }
                     },
                   ),
                 ],
@@ -197,6 +210,25 @@ class _SplitTunnelingScreenState extends State<SplitTunnelingScreen> {
             const SizedBox(height: 12),
 
             // لیست برنامه‌ها
+            if (controller.appsError != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        i18n.t('errUnknown'),
+                        style: TextStyle(color: c.danger, fontSize: 12),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: controller.fetchApps,
+                      child: Text(i18n.t('retry')),
+                    ),
+                  ],
+                ),
+              ),
+
             controller.isLoadingApps
                 ? Center(child: CircularProgressIndicator(color: c.accent))
                 : ListView.builder(
@@ -214,7 +246,10 @@ class _SplitTunnelingScreenState extends State<SplitTunnelingScreen> {
                         title: Text(app.name, style: TextStyle(color: c.text, fontSize: 14)),
                         trailing: Checkbox(
                           value: isSelected,
-                          onChanged: (_) => controller.toggleAppSelection(app.packageName),
+                          onChanged: (_) {
+                            controller.toggleAppSelection(app.packageName);
+                            context.read<VpnController>().markSettingsChanged();
+                          },
                           activeColor: c.accent,
                         ),
                       );

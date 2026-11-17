@@ -43,6 +43,20 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
+/android/.gradle/
+/android/.kotlin/
+/android/captures/
+
+# Release signing material must never be committed
+android/key.properties
+**/*.jks
+**/*.keystore
+
+# Local release outputs
+/dist/
+*.apk
+*.aab
 
 # Widget Preview related
 .widget_preview/

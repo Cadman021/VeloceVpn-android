@@ -25,6 +25,25 @@ class CityLocation {
       unreachable: false,
     );
   }
+
+  factory CityLocation.fromJson(Map<String, dynamic> json) {
+    return CityLocation(
+      id: json['id'] as String,
+      city: (json['city'] as String?)?.trim() ?? 'Unknown City',
+      country: (json['country'] as String?)?.trim() ?? 'Unknown',
+      countryCode:
+          (json['countryCode'] as String?)?.trim().toLowerCase() ?? 'xx',
+      ping: null,
+      unreachable: false,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'city': city,
+        'country': country,
+        'countryCode': countryCode,
+      };
 }
 
 class CountryGroup {

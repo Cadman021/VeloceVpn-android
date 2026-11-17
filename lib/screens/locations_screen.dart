@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../theme/theme_controller.dart';
-import '../theme/i18n.dart';
+
+import '../controllers/split_tunneling_controller.dart';
 import '../controllers/vpn_controller.dart';
 import '../services/models.dart';
+import '../theme/app_theme.dart';
+import '../theme/i18n.dart';
+import '../theme/theme_controller.dart';
 import '../widgets/country_flag.dart';
 
 enum LocationTab { locations, favorite, recent }
@@ -29,10 +32,16 @@ class _LocationsScreenState extends State<LocationsScreen> {
     super.initState();
     vpn = context.read<VpnController>();
     if (!vpn.isLocationsLoaded) {
-      vpn.preloadLocations().then((_) => setState(() {}));
+      vpn.preloadLocations().then((_) {
+        if (mounted) setState(() {});
+      });
     }
   }
 
+  Future<void> _retryLoad() async {
+    await vpn.preloadLocations(force: true);
+    if (mounted) setState(() {});
+  }
 
   Future<void> _testAllPings() async {
     if (_isTestingBatch) return;
@@ -45,7 +54,7 @@ class _LocationsScreenState extends State<LocationsScreen> {
 
     await vpn.pingLocationsInParallel(
       allLocs,
-      concurrency: 5,
+      concurrency: 4,
       onProgress: (loc) {
         if (mounted) {
           setState(() {
@@ -76,27 +85,78 @@ class _LocationsScreenState extends State<LocationsScreen> {
     }
   }
 
-  Future<void> _select(String id, String country, String city, String countryCode) async {
-    await vpn.selectLocation(SelectedLocationMeta(
-      id: id,
-      country: country,
-      city: city,
-      countryCode: countryCode,
-    ));
-    if (mounted) Navigator.of(context).pop(true);
+  Future<void> _select(CityLocation loc) async {
+    final meta = SelectedLocationMeta(
+      id: loc.id,
+      country: loc.country,
+      city: loc.city,
+      countryCode: loc.countryCode,
+    );
+
+    final wasActive = vpn.status == ConnStatus.connected ||
+        vpn.status == ConnStatus.connecting ||
+        vpn.status == ConnStatus.switching;
+
+    if (!wasActive) {
+      await vpn.selectLocation(meta);
+      if (mounted) Navigator.of(context).pop(true);
+      return;
+    }
+
+    // The selected server and the server actually carrying the tunnel must
+    // not diverge. Switch immediately and keep this screen open if it fails.
+    final split = context.read<SplitTunnelingController>();
+    final ok = await vpn.switchLocation(meta, split);
+    if (!mounted) return;
+    if (ok) {
+      Navigator.of(context).pop(true);
+    } else {
+      _showVpnError();
+    }
+  }
+
+  void _showVpnError() {
+    if (!mounted || vpn.lastErrorKind == null) return;
+    final t = context.read<I18n>();
+    final colors = context.read<ThemeController>().colors;
+    final message = switch (vpn.lastErrorKind!) {
+      VpnErrorKind.configFailed => t.t('errConfigFailed'),
+      VpnErrorKind.permissionDenied => t.t('errPermissionDenied'),
+      VpnErrorKind.startFailed => t.t('errStartFailed'),
+      VpnErrorKind.emptyInclusiveSelection => t.t('errEmptyInclusive'),
+      VpnErrorKind.unknown => t.t('errUnknown'),
+    };
+    vpn.clearError();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message, style: TextStyle(color: colors.text)),
+        backgroundColor: colors.bgElevated,
+        behavior: SnackBarBehavior.floating,
+      ));
   }
 
   void _selectOptimal() {
     final best = vpn.getOptimalLocation();
     if (best != null) {
-      _select(best.id, best.country, best.city, best.countryCode);
-    } else if (vpn.cachedLocations.isNotEmpty && vpn.cachedLocations.first.locations.isNotEmpty) {
-      final first = vpn.cachedLocations.first.locations.first;
-      _select(first.id, first.country, first.city, first.countryCode);
+      _select(best);
+      return;
     }
+    final t = context.read<I18n>();
+    final colors = context.read<ThemeController>().colors;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(
+          t.t('pingFirst'),
+          style: TextStyle(color: colors.text),
+        ),
+        backgroundColor: colors.bgElevated,
+        behavior: SnackBarBehavior.floating,
+      ));
   }
 
-  Color _getPingColor(int ping, dynamic colors) {
+  Color _getPingColor(int ping, AppColors colors) {
     if (ping < 700) return colors.success;
     if (ping < 1000) return colors.warning;
     return colors.danger;
@@ -109,9 +169,16 @@ class _LocationsScreenState extends State<LocationsScreen> {
     return groups
         .map((c) {
           final nameMatch = c.countryName.toLowerCase().contains(q);
-          final locs = c.locations.where((l) => nameMatch || l.city.toLowerCase().contains(q)).toList();
+          final locs = c.locations
+              .where((l) =>
+                  nameMatch || l.city.toLowerCase().contains(q))
+              .toList();
           if (locs.isEmpty) return null;
-          return CountryGroup(countryName: c.countryName, countryCode: c.countryCode, locations: locs);
+          return CountryGroup(
+            countryName: c.countryName,
+            countryCode: c.countryCode,
+            locations: locs,
+          );
         })
         .whereType<CountryGroup>()
         .toList();
@@ -124,6 +191,9 @@ class _LocationsScreenState extends State<LocationsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Rebuild when the background preload (started from the splash screen)
+    // completes, and when another screen changes the connected server.
+    vpn = context.watch<VpnController>();
     final colors = context.watch<ThemeController>().colors;
     final t = context.watch<I18n>();
 
@@ -140,14 +210,22 @@ class _LocationsScreenState extends State<LocationsScreen> {
           children: [
             const Icon(Icons.language, size: 20),
             const SizedBox(width: 8),
-            Text(t.t('location'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Text(
+              t.t('location'),
+              style:
+                  const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
           ],
         ),
         actions: [
           IconButton(
             tooltip: t.t('pingAll'),
             icon: _isTestingBatch
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : Icon(Icons.bolt, color: colors.accent3),
             onPressed: vpn.cachedLocations.isEmpty ? null : _testAllPings,
           ),
@@ -157,7 +235,7 @@ class _LocationsScreenState extends State<LocationsScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Column(
           children: [
-            // ── تب‌های سه‌گانه (Locations / Favorite / Recent) ────────────────
+            // ── تب‌های سه‌گانه (Locations / Favorite / Recent) ───────────
             Container(
               margin: const EdgeInsets.symmetric(vertical: 8),
               padding: const EdgeInsets.all(4),
@@ -167,14 +245,46 @@ class _LocationsScreenState extends State<LocationsScreen> {
               ),
               child: Row(
                 children: [
-                  _buildTabPill(LocationTab.locations, t.t('locations'), colors),
+                  _buildTabPill(
+                      LocationTab.locations, t.t('locations'), colors),
                   _buildTabPill(LocationTab.favorite, t.t('favorite'), colors),
                   _buildTabPill(LocationTab.recent, t.t('recent'), colors),
                 ],
               ),
             ),
 
-            // ── فیلد جستجو ──────────────────────────────────────────────────
+            if (vpn.usingCachedLocations)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: colors.bgElevated2,
+                  borderRadius: BorderRadius.circular(10),
+                  border:
+                      Border.all(color: colors.warning.withValues(alpha: 0.5)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.cloud_off, size: 16, color: colors.warning),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        t.t('staleData'),
+                        style:
+                            TextStyle(color: colors.textSecondary, fontSize: 11),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _retryLoad,
+                      child: Text(t.t('retry')),
+                    ),
+                  ],
+                ),
+              ),
+
+            // ── فیلد جستجو ─────────────────────────────────────────────
             if (_activeTab == LocationTab.locations)
               Padding(
                 padding: const EdgeInsets.only(top: 6, bottom: 10),
@@ -185,7 +295,8 @@ class _LocationsScreenState extends State<LocationsScreen> {
                     hintStyle: TextStyle(color: colors.textMuted, fontSize: 13),
                     filled: true,
                     fillColor: colors.bgElevated,
-                    prefixIcon: Icon(Icons.search, color: colors.textSecondary, size: 20),
+                    prefixIcon: Icon(Icons.search,
+                        color: colors.textSecondary, size: 20),
                     contentPadding: const EdgeInsets.symmetric(vertical: 10),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
@@ -196,11 +307,15 @@ class _LocationsScreenState extends State<LocationsScreen> {
                 ),
               ),
 
-            // ── محتوای اصلی تب‌ها ──────────────────────────────────────────
+            // ── محتوای اصلی تب‌ها ───────────────────────────────────────
             Expanded(
               child: vpn.loadFailed
-                  ? Center(child: Text(t.t('loadError'), textAlign: TextAlign.center, style: TextStyle(color: colors.danger)))
-                  : _buildTabContent(colors, t),
+                  ? _buildLoadError(colors, t)
+                  : (vpn.isLoadingLocations && vpn.cachedLocations.isEmpty)
+                      ? Center(
+                          child: CircularProgressIndicator(color: colors.accent),
+                        )
+                      : _buildTabContent(colors, t),
             ),
           ],
         ),
@@ -208,7 +323,28 @@ class _LocationsScreenState extends State<LocationsScreen> {
     );
   }
 
-  Widget _buildTabPill(LocationTab tab, String title, dynamic colors) {
+  Widget _buildLoadError(AppColors colors, I18n t) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            t.t('loadError'),
+            textAlign: TextAlign.center,
+            style: TextStyle(color: colors.danger),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: _retryLoad,
+            icon: const Icon(Icons.refresh),
+            label: Text(t.t('retry')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabPill(LocationTab tab, String title, AppColors colors) {
     final active = _activeTab == tab;
     return Expanded(
       child: GestureDetector(
@@ -233,20 +369,26 @@ class _LocationsScreenState extends State<LocationsScreen> {
     );
   }
 
-  Widget _buildTabContent(dynamic colors, I18n t) {
+  Widget _buildTabContent(AppColors colors, I18n t) {
     switch (_activeTab) {
       case LocationTab.locations:
         return ListView(
           children: [
             _buildOptimalCard(colors, t),
             const SizedBox(height: 10),
-            ..._filteredGroups.map((country) => _buildCountryAccordion(country, colors, t)),
+            ..._filteredGroups
+                .map((country) => _buildCountryAccordion(country, colors, t)),
           ],
         );
       case LocationTab.favorite:
         final favs = _favoriteLocations;
         if (favs.isEmpty) {
-          return Center(child: Text(t.t('noFavorites'), style: TextStyle(color: colors.textSecondary)));
+          return Center(
+            child: Text(
+              t.t('noFavorites'),
+              style: TextStyle(color: colors.textSecondary),
+            ),
+          );
         }
         return ListView.builder(
           itemCount: favs.length,
@@ -254,15 +396,27 @@ class _LocationsScreenState extends State<LocationsScreen> {
         );
       case LocationTab.recent:
         if (vpn.recentLocations.isEmpty) {
-          return Center(child: Text(t.t('noRecents'), style: TextStyle(color: colors.textSecondary)));
+          return Center(
+            child: Text(
+              t.t('noRecents'),
+              style: TextStyle(color: colors.textSecondary),
+            ),
+          );
         }
         return ListView.builder(
           itemCount: vpn.recentLocations.length,
           itemBuilder: (_, i) {
             final rec = vpn.recentLocations[i];
-            final matched = vpn.cachedLocations.expand((c) => c.locations).firstWhere(
+            final matched = vpn.cachedLocations
+                .expand((c) => c.locations)
+                .firstWhere(
                   (l) => l.id == rec.id,
-                  orElse: () => CityLocation(id: rec.id, city: rec.city, country: rec.country, countryCode: rec.countryCode),
+                  orElse: () => CityLocation(
+                    id: rec.id,
+                    city: rec.city,
+                    country: rec.country,
+                    countryCode: rec.countryCode,
+                  ),
                 );
             return _buildLocationTile(matched, colors, t);
           },
@@ -270,17 +424,20 @@ class _LocationsScreenState extends State<LocationsScreen> {
     }
   }
 
-  // ── کارت بهترین لوکیشن (Optimal) ──────────────────────────────────────────
-  Widget _buildOptimalCard(dynamic colors, I18n t) {
+  // ── کارت بهترین لوکیشن (Optimal) ─────────────────────────────────────────
+  Widget _buildOptimalCard(AppColors colors, I18n t) {
     final best = vpn.getOptimalLocation();
-    final isSelected = vpn.selectedMeta != null && best != null && vpn.selectedMeta!.id == best.id;
+    final isSelected =
+        vpn.selectedMeta != null && best != null && vpn.selectedMeta!.id == best.id;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(
         color: colors.bgElevated,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: isSelected ? colors.accent : colors.border),
+        border: Border.all(
+          color: isSelected ? colors.accent : colors.border,
+        ),
       ),
       child: Material(
         color: Colors.transparent,
@@ -297,15 +454,26 @@ class _LocationsScreenState extends State<LocationsScreen> {
           ),
           title: Row(
             children: [
-              Text(t.t('optimalLocation'), style: TextStyle(color: colors.text, fontWeight: FontWeight.bold, fontSize: 14)),
-              if (isSelected) ...[
+              Text(
+                t.t('optimalLocation'),
+                style: TextStyle(
+                  color: colors.text,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              if (vpn.connectedMeta != null &&
+                  vpn.status == ConnStatus.connected &&
+                  vpn.connectedMeta!.id == best?.id) ...[
                 const SizedBox(width: 8),
                 _buildActiveBadge(colors, t),
               ],
             ],
           ),
           subtitle: Text(
-            best != null ? '${best.country} - ${best.city} (${best.ping} ms)' : t.t('fastestServer'),
+            best != null
+                ? '${best.country} - ${best.city} (${best.ping} ms)'
+                : t.t('fastestServer'),
             style: TextStyle(color: colors.textSecondary, fontSize: 11),
           ),
           onTap: _selectOptimal,
@@ -315,16 +483,26 @@ class _LocationsScreenState extends State<LocationsScreen> {
   }
 
   // ── آکاردئون هر کشور ────────────────────────────────────────────────────
-  Widget _buildCountryAccordion(CountryGroup country, dynamic colors, I18n t) {
+  Widget _buildCountryAccordion(
+    CountryGroup country,
+    AppColors colors,
+    I18n t,
+  ) {
     final isOpen = _openCountry == country.countryCode;
-    final hasActiveServer = country.locations.any((l) => vpn.selectedMeta?.id == l.id);
+    final hasActiveServer = vpn.status == ConnStatus.connected &&
+        vpn.connectedMeta != null &&
+        country.locations.any((l) => vpn.connectedMeta!.id == l.id);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: colors.bgElevated,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: hasActiveServer ? colors.accent.withValues(alpha: 0.5) : colors.border),
+        border: Border.all(
+          color: hasActiveServer
+              ? colors.accent.withValues(alpha: 0.5)
+              : colors.border,
+        ),
       ),
       child: Column(
         children: [
@@ -335,40 +513,76 @@ class _LocationsScreenState extends State<LocationsScreen> {
               leading: CountryFlag(countryCode: country.countryCode),
               title: Row(
                 children: [
-                  Text(country.countryName, style: TextStyle(color: colors.text, fontWeight: FontWeight.w600, fontSize: 14)),
+                  Text(
+                    country.countryName,
+                    style: TextStyle(
+                      color: colors.text,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
                   if (hasActiveServer && !isOpen) ...[
                     const SizedBox(width: 8),
                     _buildActiveBadge(colors, t),
                   ],
                 ],
               ),
-              subtitle: Text('${country.locations.length} ${t.t('serversCount')}', style: TextStyle(color: colors.textSecondary, fontSize: 11)),
-              trailing: Icon(isOpen ? Icons.expand_less : Icons.expand_more, color: colors.textSecondary),
-              onTap: () => setState(() => _openCountry = isOpen ? null : country.countryCode),
+              subtitle: Text(
+                '${country.locations.length} ${t.t('serversCount')}',
+                style: TextStyle(color: colors.textSecondary, fontSize: 11),
+              ),
+              trailing: Icon(
+                isOpen ? Icons.expand_less : Icons.expand_more,
+                color: colors.textSecondary,
+              ),
+              onTap: () => setState(
+                () => _openCountry = isOpen ? null : country.countryCode,
+              ),
             ),
           ),
           if (isOpen)
-            ...country.locations.map((loc) => _buildLocationTile(loc, colors, t, inAccordion: true)),
+            ...country.locations.map(
+              (loc) => _buildLocationTile(loc, colors, t, inAccordion: true),
+            ),
         ],
       ),
     );
   }
 
   // ── سطر هر شهر و سرور ────────────────────────────────────────────────────
-  Widget _buildLocationTile(CityLocation loc, dynamic colors, I18n t, {bool inAccordion = false}) {
+  Widget _buildLocationTile(
+    CityLocation loc,
+    AppColors colors,
+    I18n t, {
+    bool inAccordion = false,
+  }) {
     final isSelected = vpn.selectedMeta?.id == loc.id;
+    final isActive =
+        vpn.status == ConnStatus.connected && vpn.connectedMeta?.id == loc.id;
     final isFav = vpn.favoriteIds.contains(loc.id);
     final isTesting = _testingIds.contains(loc.id);
 
     return Material(
       color: Colors.transparent,
       child: ListTile(
-        contentPadding: EdgeInsets.only(left: inAccordion ? 28 : 16, right: 14),
-        leading: CountryFlag(countryCode: loc.countryCode, width: 22, height: 16),
+        contentPadding:
+            EdgeInsets.only(left: inAccordion ? 28 : 16, right: 14),
+        leading: CountryFlag(
+          countryCode: loc.countryCode,
+          width: 22,
+          height: 16,
+        ),
         title: Row(
           children: [
-            Text(loc.city, style: TextStyle(color: isSelected ? colors.accent : colors.text, fontSize: 13, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
-            if (isSelected) ...[
+            Text(
+              loc.city,
+              style: TextStyle(
+                color: isSelected ? colors.accent : colors.text,
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+            if (isActive) ...[
               const SizedBox(width: 8),
               _buildActiveBadge(colors, t),
             ],
@@ -378,15 +592,37 @@ class _LocationsScreenState extends State<LocationsScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (isTesting)
-              const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
             else if (loc.unreachable)
-              Text(t.t('timeout'), style: TextStyle(color: colors.danger, fontSize: 11, fontWeight: FontWeight.w600))
+              Text(
+                t.t('timeout'),
+                style: TextStyle(
+                  color: colors.danger,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              )
             else if (loc.ping != null)
               Row(
                 children: [
-                  Icon(Icons.wifi, size: 14, color: _getPingColor(loc.ping!, colors)),
+                  Icon(
+                    Icons.wifi,
+                    size: 14,
+                    color: _getPingColor(loc.ping!, colors),
+                  ),
                   const SizedBox(width: 4),
-                  Text('${loc.ping} ms', style: TextStyle(color: _getPingColor(loc.ping!, colors), fontSize: 11, fontWeight: FontWeight.bold)),
+                  Text(
+                    '${loc.ping} ms',
+                    style: TextStyle(
+                      color: _getPingColor(loc.ping!, colors),
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ],
               )
             else
@@ -396,20 +632,24 @@ class _LocationsScreenState extends State<LocationsScreen> {
               ),
             const SizedBox(width: 4),
             IconButton(
-              icon: Icon(isFav ? Icons.star : Icons.star_border, color: isFav ? Colors.amber : colors.textSecondary, size: 20),
+              icon: Icon(
+                isFav ? Icons.star : Icons.star_border,
+                color: isFav ? Colors.amber : colors.textSecondary,
+                size: 20,
+              ),
               onPressed: () async {
                 await vpn.toggleFavorite(loc.id);
-                setState(() {});
+                if (mounted) setState(() {});
               },
             ),
           ],
         ),
-        onTap: () => _select(loc.id, loc.country, loc.city, loc.countryCode),
+        onTap: () => _select(loc),
       ),
     );
   }
 
-  Widget _buildActiveBadge(dynamic colors, I18n t) {
+  Widget _buildActiveBadge(AppColors colors, I18n t) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -419,7 +659,11 @@ class _LocationsScreenState extends State<LocationsScreen> {
       ),
       child: Text(
         t.t('active'),
-        style: TextStyle(color: colors.accent, fontSize: 9, fontWeight: FontWeight.bold),
+        style: TextStyle(
+          color: colors.accent,
+          fontSize: 9,
+          fontWeight: FontWeight.bold,
+        ),
       ),
     );
   }

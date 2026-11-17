@@ -1,6 +1,5 @@
-package com.veloce.veloce_vpn
+package com.cadman.veloce
 
-import android.os.Build
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
@@ -10,11 +9,13 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.net.TrafficStats
 import android.net.VpnService
+import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import libXray.LibXray
@@ -22,10 +23,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.UUID
 
 class MainActivity : FlutterActivity() {
-    private val CONTROL_CHANNEL = "com.veloce.veloce_vpn/control"
-    private val APPS_CHANNEL = "com.veloce.veloce_vpn/apps"
+    private val CONTROL_CHANNEL = "com.cadman.veloce/control"
+    private val APPS_CHANNEL = "com.cadman.veloce/apps"
     private val VPN_PERMISSION_REQUEST_CODE = 24601
 
     private var pendingResult: MethodChannel.Result? = null
@@ -35,6 +37,7 @@ class MainActivity : FlutterActivity() {
     private var pendingSplitMode: String = "exclusive"
     private var pendingSelectedApps: List<String> = emptyList()
     private var pendingExcludedIps: List<String> = emptyList()
+    private var pendingStartToken: String? = null
 
     private var lastRxBytes: Long = 0L
     private var lastTxBytes: Long = 0L
@@ -88,6 +91,7 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
 
+                    val startToken = UUID.randomUUID().toString()
                     val prepareIntent = VpnService.prepare(this)
                     if (prepareIntent != null) {
                         // اگر یک درخواست قبلی هنوز معلق مانده باشد، اول آن را رد کن تا
@@ -100,10 +104,27 @@ class MainActivity : FlutterActivity() {
                         pendingSplitMode = splitMode
                         pendingSelectedApps = selectedApps
                         pendingExcludedIps = excludedIps
+                        pendingStartToken = startToken
                         startActivityForResult(prepareIntent, VPN_PERMISSION_REQUEST_CODE)
                     } else {
-                        startVpnService(xrayConfigJson, localSocksPort, splitEnabled, splitMode, selectedApps, excludedIps)
-                        awaitVpnResult(result)
+                        try {
+                            startVpnService(
+                                xrayConfigJson,
+                                localSocksPort,
+                                splitEnabled,
+                                splitMode,
+                                selectedApps,
+                                excludedIps,
+                                startToken,
+                            )
+                            awaitVpnResult(result, startToken)
+                        } catch (e: Exception) {
+                            result.error(
+                                "vpn_start_failed",
+                                e.localizedMessage ?: e.javaClass.simpleName,
+                                null,
+                            )
+                        }
                     }
                 }
 
@@ -122,6 +143,21 @@ class MainActivity : FlutterActivity() {
 
                 "status" -> {
                     result.success(VeloceVpnService.isRunning)
+                }
+
+                "saveSplitSettings" -> {
+                    val splitEnabled = call.argument<Boolean>("splitEnabled") ?: false
+                    val splitMode = call.argument<String>("splitMode") ?: "exclusive"
+                    val selectedApps = call.argument<List<String>>("selectedApps") ?: listOf()
+                    val excludedIps = call.argument<List<String>>("excludedIps") ?: listOf()
+                    getSharedPreferences("veloce_vpn_prefs", MODE_PRIVATE)
+                        .edit()
+                        .putBoolean("last_split_enabled", splitEnabled)
+                        .putString("last_split_mode", splitMode)
+                        .putStringSet("last_selected_apps", LinkedHashSet(selectedApps))
+                        .putStringSet("last_excluded_ips", LinkedHashSet(excludedIps))
+                        .apply()
+                    result.success(null)
                 }
 
                 "testPing" -> {
@@ -221,20 +257,37 @@ class MainActivity : FlutterActivity() {
     override fun onResume() {
         super.onResume()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-            ) {
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
+            val granted =
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                val prefs = getSharedPreferences("veloce_vpn_prefs", MODE_PRIVATE)
+                if (!prefs.getBoolean("notification_permission_asked", false)) {
+                    prefs.edit().putBoolean("notification_permission_asked", true).apply()
+                    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
+                }
             }
         }
     }
 
-    private fun awaitVpnResult(result: MethodChannel.Result) {
+    private fun awaitVpnResult(
+        result: MethodChannel.Result,
+        startToken: String,
+    ) {
         CoroutineScope(Dispatchers.IO).launch {
-            var waited = 0
-            while (VeloceVpnService.isStarting && waited < 15000) {
-                kotlinx.coroutines.delay(200)
-                waited += 200
+            var waited = 0L
+            var handled = false
+            // startService() is asynchronous. Checking isStarting immediately
+            // can return before the service has even seen the intent, which used
+            // to make the first connection fail with "unknown_error".
+            while (waited < 30000L) {
+                if (VeloceVpnService.lastHandledStartToken == startToken) {
+                    handled = true
+                }
+                if (VeloceVpnService.isRunning) break
+                if (handled && !VeloceVpnService.isStarting) break
+                delay(150)
+                waited += 150
             }
             withContext(Dispatchers.Main) {
                 if (VeloceVpnService.isRunning) {
@@ -264,15 +317,33 @@ class MainActivity : FlutterActivity() {
             val splitMode = pendingSplitMode
             val selectedApps = pendingSelectedApps
             val excludedIps = pendingExcludedIps
+            val startToken = pendingStartToken ?: UUID.randomUUID().toString()
 
             pendingResult = null
             pendingXrayConfigJson = null
+            pendingStartToken = null
 
             if (resultCode == RESULT_OK && json != null) {
-                startVpnService(json, port, splitEnabled, splitMode, selectedApps, excludedIps)
-                // pendingResult بالا null شد؛ باید از متغیر محلی استفاده شود، وگرنه
-                // نتیجه‌ی MethodChannel هرگز کامل نمی‌شود (اولین اتصال بی‌پاسخ می‌ماند).
-                result?.let { awaitVpnResult(it) }
+                try {
+                    startVpnService(
+                        json,
+                        port,
+                        splitEnabled,
+                        splitMode,
+                        selectedApps,
+                        excludedIps,
+                        startToken,
+                    )
+                    // pendingResult بالا null شد؛ باید از متغیر محلی استفاده شود، وگرنه
+                    // نتیجه‌ی MethodChannel هرگز کامل نمی‌شود (اولین اتصال بی‌پاسخ می‌ماند).
+                    result?.let { awaitVpnResult(it, startToken) }
+                } catch (e: Exception) {
+                    result?.error(
+                        "vpn_start_failed",
+                        e.localizedMessage ?: e.javaClass.simpleName,
+                        null,
+                    )
+                }
             } else {
                 result?.success(false)
             }
@@ -284,6 +355,7 @@ class MainActivity : FlutterActivity() {
         pendingResult?.success(false)
         pendingResult = null
         pendingXrayConfigJson = null
+        pendingStartToken = null
         super.onDestroy()
     }
 
@@ -343,6 +415,7 @@ class MainActivity : FlutterActivity() {
         splitMode: String,
         selectedApps: List<String>,
         excludedIps: List<String>,
+        startToken: String,
     ) {
         lastSampleTime = 0L
         lastRxBytes = 0L
@@ -353,6 +426,7 @@ class MainActivity : FlutterActivity() {
                 action = VeloceVpnService.ACTION_START
                 putExtra(VeloceVpnService.EXTRA_XRAY_CONFIG_JSON, xrayConfigJson)
                 putExtra(VeloceVpnService.EXTRA_LOCAL_SOCKS_PORT, localSocksPort)
+                putExtra(VeloceVpnService.EXTRA_START_TOKEN, startToken)
                 putExtra("split_enabled", splitEnabled)
                 putExtra("split_mode", splitMode)
                 putStringArrayListExtra("selected_apps", ArrayList(selectedApps))
@@ -360,7 +434,6 @@ class MainActivity : FlutterActivity() {
             }
         val prefs = getSharedPreferences("veloce_vpn_prefs", MODE_PRIVATE)
         prefs.edit().apply {
-            putString("last_xray_config", xrayConfigJson)
             putInt("last_socks_port", localSocksPort)
             putBoolean("last_split_enabled", splitEnabled)
             putString("last_split_mode", splitMode)
@@ -370,7 +443,13 @@ class MainActivity : FlutterActivity() {
             putStringSet("last_excluded_ips", LinkedHashSet(excludedIps))
             apply()
         }
-        startService(intent)
+        SecureConfigStore.save(this, xrayConfigJson)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 
     private fun getDeviceSpeed(): Map<String, Long> {

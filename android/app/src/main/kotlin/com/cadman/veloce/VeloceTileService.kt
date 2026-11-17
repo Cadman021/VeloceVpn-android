@@ -1,4 +1,4 @@
-package com.veloce.veloce_vpn
+package com.cadman.veloce
 
 import android.app.PendingIntent
 import android.content.Context
@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import java.util.UUID
 
 class VeloceTileService : TileService() {
     companion object {
@@ -49,18 +50,24 @@ class VeloceTileService : TileService() {
             startService(stopIntent)
             scheduleStateRefresh(waitForStart = false)
         } else {
-            // دریافت آخرین کانفیگ و تنظیمات ذخیره‌شده
-            val prefs = getSharedPreferences("veloce_vpn_prefs", Context.MODE_PRIVATE)
-            val lastConfig = prefs.getString("last_xray_config", null)
+            // دریافت آخرین کانفیگ (رمزنگاری‌شده) و تنظیمات ذخیره‌شده
+            val lastConfig = SecureConfigStore.read(this)
             val hasVpnPermission = VpnService.prepare(this) == null
 
             if (lastConfig != null && hasVpnPermission) {
-                // اتصال مستقیم بدون باز کردن برنامه
+                val prefs = getSharedPreferences("veloce_vpn_prefs", Context.MODE_PRIVATE)
                 val startIntent =
                     Intent(this, VeloceVpnService::class.java).apply {
                         action = VeloceVpnService.ACTION_START
                         putExtra(VeloceVpnService.EXTRA_XRAY_CONFIG_JSON, lastConfig)
-                        putExtra(VeloceVpnService.EXTRA_LOCAL_SOCKS_PORT, prefs.getInt("last_socks_port", 10808))
+                        putExtra(
+                            VeloceVpnService.EXTRA_LOCAL_SOCKS_PORT,
+                            prefs.getInt("last_socks_port", 10808),
+                        )
+                        putExtra(
+                            VeloceVpnService.EXTRA_START_TOKEN,
+                            UUID.randomUUID().toString(),
+                        )
                         putExtra("split_enabled", prefs.getBoolean("last_split_enabled", false))
                         putExtra("split_mode", prefs.getString("last_split_mode", "exclusive"))
                         putStringArrayListExtra(
@@ -144,9 +151,9 @@ class VeloceTileService : TileService() {
         tile.state = if (isRunning) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label =
             when {
-                isRunning -> "Veloce (Connected)"
-                isStarting -> "Veloce (Connecting)"
-                else -> "Veloce VPN"
+                isRunning -> getString(R.string.tile_connected)
+                isStarting -> getString(R.string.tile_connecting)
+                else -> getString(R.string.tile_idle)
             }
         tile.updateTile()
     }
