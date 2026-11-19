@@ -19,7 +19,8 @@ val keystoreProperties = Properties().apply {
 val releaseKeystoreFile = keystoreProperties.getProperty("storeFile")?.let { file(it) }
 val hasReleaseSigning = releaseKeystoreFile?.isFile == true
 val isCi = System.getenv("CI") == "true" || System.getenv("GITHUB_ACTIONS") == "true"
-if (isCi && !hasReleaseSigning) {
+val isReleaseBuild = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+if (isCi && isReleaseBuild && !hasReleaseSigning) {
     throw GradleException(
         "Release signing material is missing in CI. Configure android/key.properties " +
             "and the ANDROID_KEYSTORE_BASE64 secret before building a release.",
