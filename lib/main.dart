@@ -7,6 +7,7 @@ import 'package:veloce_vpn/controllers/split_tunneling_controller.dart';
 import 'theme/theme_controller.dart';
 import 'theme/i18n.dart';
 import 'theme/app_theme.dart';
+import 'controllers/update_controller.dart';
 import 'controllers/vpn_controller.dart';
 import 'screens/splash_screen.dart';
 
@@ -17,6 +18,7 @@ Future<void> main() async {
   final i18n = I18n();
   final vpn = VpnController();
   final split = SplitTunnelingController();
+  final update = UpdateController();
 
   await Future.wait([
     themeController.load(),
@@ -39,6 +41,7 @@ Future<void> main() async {
     i18n: i18n,
     vpn: vpn,
     split: split,
+    update: update,
   ));
 }
 
@@ -47,6 +50,7 @@ class VeloceApp extends StatelessWidget {
   final I18n i18n;
   final VpnController vpn;
   final SplitTunnelingController split;
+  final UpdateController update;
 
   /// Optional home widget for widget tests. Defaults to the splash screen.
   final Widget? home;
@@ -57,6 +61,7 @@ class VeloceApp extends StatelessWidget {
     required this.i18n,
     required this.vpn,
     required this.split,
+    required this.update,
     this.home,
   });
 
@@ -68,6 +73,7 @@ class VeloceApp extends StatelessWidget {
         ChangeNotifierProvider.value(value: i18n),
         ChangeNotifierProvider.value(value: vpn),
         ChangeNotifierProvider.value(value: split),
+        ChangeNotifierProvider.value(value: update),
       ],
       child: Consumer2<ThemeController, I18n>(
         builder: (context, theme, lang, _) {

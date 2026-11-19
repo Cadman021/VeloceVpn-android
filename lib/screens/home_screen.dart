@@ -5,12 +5,14 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../controllers/split_tunneling_controller.dart';
+import '../controllers/update_controller.dart';
 import '../controllers/vpn_controller.dart';
 import '../theme/app_theme.dart';
 import '../theme/i18n.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/country_flag.dart';
 import '../widgets/directional_chevron.dart';
+import '../widgets/update_banner.dart';
 import 'locations_screen.dart';
 import 'settings_screen.dart';
 
@@ -33,7 +35,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _startSpeedPolling();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<VpnController>().syncStatus();
+      if (!mounted) return;
+      context.read<VpnController>().syncStatus();
+      unawaited(context.read<UpdateController>().check());
     });
   }
 
@@ -171,6 +175,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final colors = context.watch<ThemeController>().colors;
     final t = context.watch<I18n>();
     final vpn = context.watch<VpnController>();
+    final update = context.watch<UpdateController>();
 
     final isConn = vpn.status == ConnStatus.connected;
     final isConnecting = vpn.status == ConnStatus.connecting;
@@ -209,6 +214,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (update.available != null)
+                      UpdateBanner(
+                        release: update.available!,
+                        onDismiss: () => update.dismiss(),
+                      ),
+
                     // ── کارت انتخاب لوکیشن ────────────────────────────────
                     InkWell(
                       onTap: () => Navigator.of(context).push(

@@ -4,10 +4,12 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/split_tunneling_controller.dart';
+import '../controllers/update_controller.dart';
 import '../controllers/vpn_controller.dart';
 import '../theme/app_theme.dart';
 import '../theme/i18n.dart';
 import '../theme/theme_controller.dart';
+import '../services/update_service.dart';
 import '../widgets/directional_chevron.dart';
 import 'split_tunneling_screen.dart';
 
@@ -33,6 +35,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final themeController = context.watch<ThemeController>();
     final t = context.watch<I18n>();
     final vpn = context.watch<VpnController>();
+    final update = context.watch<UpdateController>();
 
     return Scaffold(
       backgroundColor: colors.bg,
@@ -131,6 +134,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 24),
 
+          _linkRow(
+            colors,
+            label: t.t('checkForUpdates'),
+            subtitle: update.isChecking
+                ? t.t('checking')
+                : update.available != null
+                    ? 'v${update.available!.version} ${t.t('updateAvailableShort')}'
+                    : t.t('upToDate'),
+            onTap: _checkUpdates,
+          ),
           _linkRow(
             colors,
             label: t.t('privacyPolicy'),
@@ -428,6 +441,78 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _checkUpdates() async {
+    final update = context.read<UpdateController>();
+    final t = context.read<I18n>();
+    await update.check(force: true);
+    if (!mounted) return;
+
+    if (update.available != null) {
+      _showUpdateDialog(update.available!);
+      return;
+    }
+    if (update.error != null) {
+      _showSnack(t.t('updateCheckFailed'));
+      return;
+    }
+    _showSnack(t.t('upToDate'));
+  }
+
+  void _showUpdateDialog(ReleaseInfo release) {
+    final t = context.read<I18n>();
+    final colors = context.read<ThemeController>().colors;
+    final notes = release.notes.trim();
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: colors.bgElevated,
+        title: Text(
+          '${t.t('updateAvailable')} v${release.version}',
+          style: TextStyle(color: colors.text),
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420, maxHeight: 300),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              notes.isEmpty ? t.t('updateAvailable') : notes,
+              style: TextStyle(
+                color: colors.textSecondary,
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(t.t('later')),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: colors.accent),
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              _openLink(release.htmlUrl);
+            },
+            child: Text(t.t('updateNow')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSnack(String message) {
+    final colors = context.read<ThemeController>().colors;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message, style: TextStyle(color: colors.text)),
+        backgroundColor: colors.bgElevated,
+        behavior: SnackBarBehavior.floating,
+      ));
   }
 
   Future<void> _openLicenses() async {

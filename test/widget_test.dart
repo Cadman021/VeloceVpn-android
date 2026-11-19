@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:veloce_vpn/controllers/split_tunneling_controller.dart';
+import 'package:veloce_vpn/controllers/update_controller.dart';
 import 'package:veloce_vpn/controllers/vpn_controller.dart';
 import 'package:veloce_vpn/main.dart';
 import 'package:veloce_vpn/theme/i18n.dart';
@@ -19,6 +20,7 @@ Future<TextDirection> _directionFor(WidgetTester tester, String lang) async {
       i18n: i18n,
       vpn: VpnController(),
       split: SplitTunnelingController(),
+      update: UpdateController(),
       home: Builder(
         builder: (context) {
           captured = Directionality.of(context);
