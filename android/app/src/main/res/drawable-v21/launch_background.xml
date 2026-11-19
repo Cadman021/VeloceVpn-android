@@ -5,6 +5,6 @@
     <item>
         <bitmap
             android:gravity="center"
-            android:src="@drawable/launch_logo" />
+            android:src="@drawable/launch_logo_veloce" />
     </item>
 </layer-list>

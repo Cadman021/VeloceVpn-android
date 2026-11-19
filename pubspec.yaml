@@ -30,9 +30,10 @@ flutter:
     - assets/licenses/AGPL-3.0.txt
 
 flutter_launcher_icons:
-  android: "ic_launcher"
+  android: "ic_launcher_veloce"
   ios: false
-  image_path: "assets/images/app-icon.png"
+  image_path: "assets/images/icon/veloce-icon-square.png"
   min_sdk_android: 24
   adaptive_icon_background: "#121316"
-  adaptive_icon_foreground: "assets/images/app-icon-foreground.png"
+  adaptive_icon_foreground: "assets/images/icon/veloce-icon-foreground.png"
+  adaptive_icon_monochrome: "assets/images/icon/veloce-icon-monochrome.png"
