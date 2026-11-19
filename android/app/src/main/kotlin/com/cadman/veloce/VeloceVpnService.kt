@@ -559,6 +559,8 @@ class VeloceVpnService : VpnService() {
         closeTunFd()
         clearConfigFile()
         statsAvailable = false
+        totalDownBytes = 0L
+        totalUpBytes = 0L
     }
 
     private fun startMonitors() {
@@ -787,10 +789,7 @@ class VeloceVpnService : VpnService() {
     }
 
     private fun stopVpnInternal() {
-        stopXrayProcess()
-        unregisterNetworkCallback()
-        closeTunFd()
-        clearConfigFile()
+        cleanupTunnel()
         isRunning = false
         isStarting = false
         isReconnecting = false
