@@ -16,6 +16,15 @@ val keystoreProperties = Properties().apply {
         FileInputStream(keystorePropertiesFile).use { load(it) }
     }
 }
+val releaseKeystoreFile = keystoreProperties.getProperty("storeFile")?.let { file(it) }
+val hasReleaseSigning = releaseKeystoreFile?.isFile == true
+val isCi = System.getenv("CI") == "true" || System.getenv("GITHUB_ACTIONS") == "true"
+if (isCi && !hasReleaseSigning) {
+    throw GradleException(
+        "Release signing material is missing in CI. Configure android/key.properties " +
+            "and the ANDROID_KEYSTORE_BASE64 secret before building a release.",
+    )
+}
 
 android {
     namespace = "com.cadman.veloce"
@@ -47,11 +56,11 @@ android {
     }
 
     signingConfigs {
-        if (keystorePropertiesFile.exists()) {
+        if (hasReleaseSigning) {
             create("release") {
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
-                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storeFile = releaseKeystoreFile
                 storePassword = keystoreProperties.getProperty("storePassword")
             }
         }
@@ -59,10 +68,10 @@ android {
 
     buildTypes {
         release {
-            signingConfig = if (keystorePropertiesFile.exists()) {
+            signingConfig = if (hasReleaseSigning) {
                 signingConfigs.getByName("release")
             } else {
-                logger.warn("key.properties not found; release APK will use the DEBUG signing key and must not be published.")
+                logger.warn("Release keystore not found; release APK will use the DEBUG signing key and must not be published.")
                 signingConfigs.getByName("debug")
             }
         }
