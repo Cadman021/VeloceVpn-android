@@ -26,6 +26,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Launcher and splash icons were cropped on circular/squircle masks after the 1.0.0 icon change
 - Reconnect and health state now reach Flutter instead of showing a stale "connected" UI
 - Traffic counters reset cleanly when Xray restarts on reconnect
+- Loopback SOCKS and metrics ports are chosen dynamically, so an occupied port cannot block startup
+- Wildcard exclusions such as `*.example.com` are normalized to Xray's `domain:` syntax
+- CI release builds fail when signing material is missing; local builds still fall back to the debug key
 
 ## [1.0.0] - 2026-11-17
 
