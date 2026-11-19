@@ -26,12 +26,14 @@ object XrayConfigBuilder {
         socksPort: Int,
         excludedIpsDomains: List<String>,
         mtu: Int,
+        metricsPort: Int = METRICS_PORT,
     ): JSONObject {
         require(rawConfig.toByteArray(Charsets.UTF_8).size <= MAX_CONFIG_BYTES) {
             "config_too_large"
         }
         require(tunFd > 0) { "invalid_tun_fd" }
         require(socksPort in 1024..65535) { "invalid_socks_port" }
+        require(metricsPort in 1024..65535) { "invalid_metrics_port" }
 
         val root =
             try {
@@ -213,7 +215,7 @@ object XrayConfigBuilder {
             "metrics",
             JSONObject()
                 .put("tag", "metrics")
-                .put("listen", "127.0.0.1:$METRICS_PORT"),
+                .put("listen", "127.0.0.1:$metricsPort"),
         )
 
         val env = root.optJSONObject("env") ?: JSONObject()

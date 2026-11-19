@@ -23,8 +23,10 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
 import java.util.concurrent.Executors
@@ -127,6 +129,7 @@ class VeloceVpnService : VpnService() {
     private var activeSelectedApps: List<String> = emptyList()
     private var activeExcludedIpsDomains: List<String> = emptyList()
     private var activeSocksPort = 10808
+    private var activeMetricsPort = METRICS_PORT
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val reconnectRunnable = Runnable { reconnectNow() }
@@ -189,6 +192,7 @@ class VeloceVpnService : VpnService() {
                     activeSelectedApps = selectedApps.toList()
                     activeExcludedIpsDomains = excludedIpsDomains.toList()
                     activeSocksPort = localSocksPort
+                    activeMetricsPort = chooseFreePort(METRICS_PORT)
                 }
                 val startToken = intent.getStringExtra(EXTRA_START_TOKEN) ?: "legacy-${System.currentTimeMillis()}"
 
@@ -323,6 +327,7 @@ class VeloceVpnService : VpnService() {
                     socksPort = localSocksPort,
                     excludedIpsDomains = excludedIpsDomains,
                     mtu = TUN_MTU,
+                    metricsPort = activeMetricsPort,
                 )
 
             val file = File(noBackupFilesDir, XRAY_CONFIG_FILE_NAME)
@@ -600,7 +605,7 @@ class VeloceVpnService : VpnService() {
     private fun pollMetrics() {
         if (!isRunning || stopRequested.get() || isReconnecting) return
         try {
-            val connection = URL("http://127.0.0.1:$METRICS_PORT/metrics").openConnection() as HttpURLConnection
+            val connection = URL("http://127.0.0.1:$activeMetricsPort/metrics").openConnection() as HttpURLConnection
             connection.connectTimeout = 1500
             connection.readTimeout = 1500
             connection.requestMethod = "GET"
@@ -694,6 +699,20 @@ class VeloceVpnService : VpnService() {
                 scheduleReconnect()
             }
         }
+    }
+
+    private fun chooseFreePort(preferred: Int): Int {
+        for (candidate in listOf(preferred, 0)) {
+            try {
+                ServerSocket(candidate, 1, InetAddress.getByName("127.0.0.1")).use {
+                    if (candidate != 0) return candidate
+                    return it.localPort
+                }
+            } catch (_: Exception) {
+                // Try an ephemeral port next.
+            }
+        }
+        return preferred
     }
 
     private fun usableNetworkExcept(lost: Network): Network? {
