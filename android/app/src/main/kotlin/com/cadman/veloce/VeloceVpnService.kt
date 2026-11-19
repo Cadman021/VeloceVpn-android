@@ -492,19 +492,19 @@ class VeloceVpnService : VpnService() {
                     }
 
                     override fun onLost(network: Network) {
+                        // Prefer a still-usable network (e.g. Wi-Fi lost,
+                        // mobile already up) before restarting Xray.
+                        val usable = usableNetworkExcept(network)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                            // Prefer a still-usable network (e.g. Wi-Fi lost,
-                            // mobile already up) before restarting Xray.
-                            val usable = usableNetworkExcept(network)
                             try {
                                 setUnderlyingNetworks(
                                     if (usable != null) arrayOf(usable) else null,
                                 )
                             } catch (_: Exception) {
                             }
-                            if (!isStarting && usable == null && (isRunning || isReconnecting)) {
-                                scheduleReconnect()
-                            }
+                        }
+                        if (!isStarting && usable == null && (isRunning || isReconnecting)) {
+                            scheduleReconnect()
                         }
                     }
 
