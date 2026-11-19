@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -143,6 +144,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ? 'v${update.available!.version} ${t.t('updateAvailableShort')}'
                     : t.t('upToDate'),
             onTap: _checkUpdates,
+          ),
+          _linkRow(
+            colors,
+            label: t.t('diagnostics'),
+            subtitle: t.t('diagnosticsHint'),
+            onTap: _openDiagnostics,
           ),
           _linkRow(
             colors,
@@ -458,6 +465,91 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
     _showSnack(t.t('upToDate'));
+  }
+
+  Future<void> _openDiagnostics() async {
+    final vpn = context.read<VpnController>();
+    final t = context.read<I18n>();
+    final colors = context.read<ThemeController>().colors;
+    Map<String, dynamic> native = const {};
+    try {
+      native = await vpn.bridge.diagnostics();
+    } catch (e) {
+      debugPrint('[Diagnostics] native snapshot unavailable: $e');
+    }
+    if (!mounted) return;
+
+    String version = '?';
+    String build = '';
+    try {
+      final info = await _packageInfo;
+      version = info.version;
+      build = info.buildNumber;
+    } catch (_) {}
+
+    String bytes(Object? value) {
+      final n = value is num ? value.toInt() : 0;
+      if (n < 1024) return '$n B';
+      if (n < 1024 * 1024) return '${(n / 1024).toStringAsFixed(1)} KB';
+      return '${(n / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+
+    final lastError = (native['lastError'] as String?)?.trim() ?? '';
+    final lastErrorLabel = lastError.isEmpty ? 'none' : lastError;
+    final buildLabel = build.isEmpty ? '' : ' ($build)';
+    final report = [
+      'Veloce VPN diagnostics',
+      'App version: $version$buildLabel',
+      'Android SDK: ${native['androidSdk'] ?? '?'}',
+      'ABI: ${native['abi'] ?? '?'}',
+      'VPN running: ${native['running'] ?? '?'}',
+      'Starting: ${native['starting'] ?? '?'}',
+      'Reconnecting: ${native['reconnecting'] ?? '?'}',
+      'Reconnect attempts: ${native['reconnectAttempts'] ?? '?'}',
+      'Health failures: ${native['healthFailures'] ?? '?'}',
+      'Tunnel stats available: ${native['statsAvailable'] ?? '?'}',
+      'Tunnel down: ${bytes(native['totalDownBytes'])}',
+      'Tunnel up: ${bytes(native['totalUpBytes'])}',
+      'Last error: $lastErrorLabel',
+    ].join('\n');
+
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: colors.bgElevated,
+        title: Text(t.t('diagnostics'), style: TextStyle(color: colors.text)),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480, maxHeight: 380),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              report,
+              style: TextStyle(
+                color: colors.textSecondary,
+                fontSize: 12,
+                height: 1.45,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(t.t('later')),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: colors.accent),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: report)).ignore();
+              Navigator.of(dialogContext).pop();
+              _showSnack(t.t('copied'));
+            },
+            child: Text(t.t('copy')),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showUpdateDialog(ReleaseInfo release) {

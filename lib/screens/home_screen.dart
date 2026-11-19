@@ -93,6 +93,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final vpn = context.read<VpnController>();
     if (vpn.status == ConnStatus.connected ||
         vpn.status == ConnStatus.connecting ||
+        vpn.status == ConnStatus.reconnecting ||
         vpn.status == ConnStatus.switching) {
       await vpn.disconnect(waitForNative: true);
       HapticFeedback.lightImpact();
@@ -179,8 +180,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final isConn = vpn.status == ConnStatus.connected;
     final isConnecting = vpn.status == ConnStatus.connecting;
+    final isReconnecting = vpn.status == ConnStatus.reconnecting;
     final isSwitching = vpn.status == ConnStatus.switching;
-    final isBusy = isConnecting || isSwitching;
+    final isBusy = isConnecting || isReconnecting || isSwitching;
 
     return Scaffold(
       backgroundColor: colors.bg,
@@ -351,11 +353,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ? t.t('connected')
                             : isSwitching
                                 ? t.t('switching')
-                                : isConnecting
-                                    ? t.t('connecting')
-                                    : t.t('disconnected'),
+                                : isReconnecting
+                                    ? t.t('reconnecting')
+                                    : isConnecting
+                                        ? t.t('connecting')
+                                        : t.t('disconnected'),
                         style: TextStyle(
-                          color: isConn ? colors.success : colors.textSecondary,
+                          color: isReconnecting
+                              ? colors.warning
+                              : isConn
+                                  ? colors.success
+                                  : colors.textSecondary,
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),

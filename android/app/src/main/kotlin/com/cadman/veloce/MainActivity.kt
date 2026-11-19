@@ -23,6 +23,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.util.UUID
 
 class MainActivity : FlutterActivity() {
@@ -143,6 +145,17 @@ class MainActivity : FlutterActivity() {
 
                 "status" -> {
                     result.success(VeloceVpnService.isRunning)
+                }
+
+                "reconnecting" -> {
+                    result.success(VeloceVpnService.isReconnecting)
+                }
+
+                "diagnostics" -> {
+                    val snapshot = VeloceVpnService.diagnosticsSnapshot().toMutableMap()
+                    snapshot["androidSdk"] = Build.VERSION.SDK_INT
+                    snapshot["abi"] = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
+                    result.success(snapshot)
                 }
 
                 "saveSplitSettings" -> {
@@ -417,6 +430,7 @@ class MainActivity : FlutterActivity() {
         excludedIps: List<String>,
         startToken: String,
     ) {
+        val actualSocksPort = chooseLocalSocksPort(localSocksPort)
         lastSampleTime = 0L
         lastRxBytes = 0L
         lastTxBytes = 0L
@@ -425,7 +439,7 @@ class MainActivity : FlutterActivity() {
             Intent(this, VeloceVpnService::class.java).apply {
                 action = VeloceVpnService.ACTION_START
                 putExtra(VeloceVpnService.EXTRA_XRAY_CONFIG_JSON, xrayConfigJson)
-                putExtra(VeloceVpnService.EXTRA_LOCAL_SOCKS_PORT, localSocksPort)
+                putExtra(VeloceVpnService.EXTRA_LOCAL_SOCKS_PORT, actualSocksPort)
                 putExtra(VeloceVpnService.EXTRA_START_TOKEN, startToken)
                 putExtra("split_enabled", splitEnabled)
                 putExtra("split_mode", splitMode)
@@ -434,7 +448,7 @@ class MainActivity : FlutterActivity() {
             }
         val prefs = getSharedPreferences("veloce_vpn_prefs", MODE_PRIVATE)
         prefs.edit().apply {
-            putInt("last_socks_port", localSocksPort)
+            putInt("last_socks_port", actualSocksPort)
             putBoolean("last_split_enabled", splitEnabled)
             putString("last_split_mode", splitMode)
             // کاشی Quick Settings از همین مقادیر برای اتصال استفاده می‌کند؛ بدون
@@ -452,13 +466,50 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun chooseLocalSocksPort(preferred: Int): Int {
+        if (preferred in 1024..65535 && isPortFree(preferred)) return preferred
+        return try {
+            ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
+        } catch (_: Exception) {
+            10808
+        }
+    }
+
+    private fun isPortFree(port: Int): Boolean =
+        try {
+            ServerSocket(port, 1, InetAddress.getByName("127.0.0.1")).use { true }
+        } catch (_: Exception) {
+            false
+        }
+
     private fun getDeviceSpeed(): Map<String, Long> {
-        val currentRx = TrafficStats.getTotalRxBytes()
-        val currentTx = TrafficStats.getTotalTxBytes()
+        // Prefer Xray's loopback metrics: these counters describe only the
+        // tunnel, not every app on the device. TrafficStats is a fallback for
+        // the short window before the first metrics scrape.
+        val tunnelStats = VeloceVpnService.statsAvailable
+        val currentRx =
+            if (tunnelStats) {
+                VeloceVpnService.totalDownBytes
+            } else {
+                TrafficStats.getTotalRxBytes()
+            }
+        val currentTx =
+            if (tunnelStats) {
+                VeloceVpnService.totalUpBytes
+            } else {
+                TrafficStats.getTotalTxBytes()
+            }
         val now = System.currentTimeMillis()
 
         if (currentRx == TrafficStats.UNSUPPORTED.toLong() || currentTx == TrafficStats.UNSUPPORTED.toLong()) {
             return mapOf("downBps" to 0L, "upBps" to 0L)
+        }
+
+        // Counters restart from zero on reconnect/xray restart.
+        if (currentRx < lastRxBytes || currentTx < lastTxBytes) {
+            lastSampleTime = 0L
+            lastRxBytes = 0L
+            lastTxBytes = 0L
         }
 
         if (lastSampleTime == 0L || lastRxBytes == 0L) {

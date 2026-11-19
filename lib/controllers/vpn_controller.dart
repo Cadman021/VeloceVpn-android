@@ -38,6 +38,16 @@ class NativeVpnBridge {
     return result ?? false;
   }
 
+  Future<bool> isNativeReconnecting() async {
+    final result = await _channel.invokeMethod<bool>('reconnecting');
+    return result ?? false;
+  }
+
+  Future<Map<String, dynamic>> diagnostics() async {
+    final result = await _channel.invokeMapMethod<String, dynamic>('diagnostics');
+    return result ?? const {};
+  }
+
   Future<int?> testPing(Map<String, dynamic> xrayConfig) async {
     final result = await _channel.invokeMethod<int>('testPing', {
       'xrayConfigJson': jsonEncode(xrayConfig),
@@ -299,6 +309,7 @@ class VpnController extends ChangeNotifier with WidgetsBindingObserver {
   ) async {
     final wasActive = status == ConnStatus.connected ||
         status == ConnStatus.connecting ||
+        status == ConnStatus.reconnecting ||
         status == ConnStatus.switching;
 
     await selectLocation(meta);
@@ -320,7 +331,9 @@ class VpnController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// بعد از تغییر تنظیماتی که فقط با reconnect اعمال می‌شوند صدا زده می‌شود.
   void markSettingsChanged() {
-    if (status == ConnStatus.connected || status == ConnStatus.connecting) {
+    if (status == ConnStatus.connected ||
+        status == ConnStatus.connecting ||
+        status == ConnStatus.reconnecting) {
       needsReconnect = true;
       notifyListeners();
     }
@@ -514,20 +527,36 @@ class VpnController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> syncStatus() async {
     if (_disposed || _connectInFlight || _disconnectInFlight) return;
     final bool running;
+    final bool reconnecting;
     try {
       running = await bridge.status();
+      reconnecting = running ? false : await bridge.isNativeReconnecting();
     } catch (_) {
       return;
     }
     if (_disposed) return;
 
-    if (running && status == ConnStatus.disconnected) {
+    if (running && status != ConnStatus.connected) {
       status = ConnStatus.connected;
       connectedMeta ??= selectedMeta;
       connectedAt ??= DateTime.now();
       _statusController.add(status);
       notifyListeners();
+    } else if (!running && reconnecting) {
+      if (status != ConnStatus.reconnecting) {
+        status = ConnStatus.reconnecting;
+        connectedMeta ??= selectedMeta;
+        connectedAt ??= DateTime.now();
+        _statusController.add(status);
+        notifyListeners();
+      }
     } else if (!running && status == ConnStatus.connected) {
+      status = ConnStatus.disconnected;
+      connectedMeta = null;
+      connectedAt = null;
+      _statusController.add(status);
+      notifyListeners();
+    } else if (!running && status == ConnStatus.reconnecting) {
       status = ConnStatus.disconnected;
       connectedMeta = null;
       connectedAt = null;

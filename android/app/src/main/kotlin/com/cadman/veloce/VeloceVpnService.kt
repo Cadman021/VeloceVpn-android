@@ -18,10 +18,18 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import libXray.LibXray
-import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.Socket
+import java.net.URL
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -37,6 +45,10 @@ class VeloceVpnService : VpnService() {
         const val NOTIFICATION_ID = 1001
 
         private const val TAG = "VeloceVpn"
+        private const val METRICS_PORT = XrayConfigBuilder.METRICS_PORT
+        private const val MAX_RECONNECT_ATTEMPTS = 6
+        private const val HEALTH_INTERVAL_SECONDS = 45L
+        private const val HEALTH_FAILURE_THRESHOLD = 3
         private const val XRAY_CONFIG_FILE_NAME = "xray_config.json"
         private const val TUN_MTU = 1400
         private const val TUN_IPV4_ADDRESS = "172.19.0.1"
@@ -57,16 +69,70 @@ class VeloceVpnService : VpnService() {
         var lastError: String? = null
             private set
 
+        /** در حالی که سرویس منتظر شبکه/تلاش مجدد است true می‌شود. */
+        @Volatile
+        var isReconnecting: Boolean = false
+            private set
+
+        @Volatile
+        var reconnectAttempts: Int = 0
+            private set
+
+        @Volatile
+        var healthFailures: Int = 0
+            private set
+
+        /** مجموع بایت‌های تونل که از metrics لوکال Xray خوانده می‌شود. */
+        @Volatile
+        var totalDownBytes: Long = 0L
+            private set
+
+        @Volatile
+        var totalUpBytes: Long = 0L
+            private set
+
+        @Volatile
+        var statsAvailable: Boolean = false
+            private set
+
         /** توکن آخرین درخواست start که سرویس واقعاً دریافت کرده است. */
         @Volatile
         var lastHandledStartToken: String? = null
             private set
+
+        /** Safe, credential-free state for the in-app diagnostics dialog. */
+        fun diagnosticsSnapshot(): Map<String, Any> =
+            mapOf(
+                "running" to isRunning,
+                "starting" to isStarting,
+                "reconnecting" to isReconnecting,
+                "reconnectAttempts" to reconnectAttempts,
+                "healthFailures" to healthFailures,
+                "statsAvailable" to statsAvailable,
+                "totalDownBytes" to totalDownBytes,
+                "totalUpBytes" to totalUpBytes,
+                "lastError" to (lastError ?: ""),
+            )
     }
 
     private var tunFd: ParcelFileDescriptor? = null
     private var configFile: File? = null
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    // Settings needed to reconnect without asking Flutter for the config again.
+    private var activeConfigJson: String? = null
+    private var activeSplitEnabled = false
+    private var activeSplitMode = "exclusive"
+    private var activeSelectedApps: List<String> = emptyList()
+    private var activeExcludedIpsDomains: List<String> = emptyList()
+    private var activeSocksPort = 10808
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val reconnectRunnable = Runnable { reconnectNow() }
+    private var reconnectScheduled = false
+    private var monitor: ScheduledExecutorService? = null
+    private var healthMonitor: ScheduledExecutorService? = null
 
     // LibXray.invoke یک فراخوانی بلاک‌کننده و سنگین است؛ در ترد اصلی اجرا نمی‌شود.
     private val worker = Executors.newSingleThreadExecutor()
@@ -80,6 +146,7 @@ class VeloceVpnService : VpnService() {
     private val generation = AtomicLong(0L)
 
     // startForeground باید فقط یک‌بار per-service-instance فراخوانی شود.
+    @Volatile
     private var foregroundStarted = false
 
     @Synchronized
@@ -88,6 +155,10 @@ class VeloceVpnService : VpnService() {
         if (isStarting) return false
         isStarting = true
         lastError = null
+        isReconnecting = false
+        reconnectAttempts = 0
+        reconnectScheduled = false
+        mainHandler.removeCallbacks(reconnectRunnable)
         return true
     }
 
@@ -110,6 +181,15 @@ class VeloceVpnService : VpnService() {
                 val splitMode = intent.getStringExtra("split_mode") ?: "exclusive"
                 val selectedApps = intent.getStringArrayListExtra("selected_apps") ?: arrayListOf()
                 val excludedIpsDomains = intent.getStringArrayListExtra("excluded_ips") ?: arrayListOf()
+                val localSocksPort = intent.getIntExtra(EXTRA_LOCAL_SOCKS_PORT, 10808)
+                if (xrayConfigJson != null) {
+                    activeConfigJson = xrayConfigJson
+                    activeSplitEnabled = splitEnabled
+                    activeSplitMode = splitMode
+                    activeSelectedApps = selectedApps.toList()
+                    activeExcludedIpsDomains = excludedIpsDomains.toList()
+                    activeSocksPort = localSocksPort
+                }
                 val startToken = intent.getStringExtra(EXTRA_START_TOKEN) ?: "legacy-${System.currentTimeMillis()}"
 
                 if (xrayConfigJson == null) {
@@ -132,6 +212,7 @@ class VeloceVpnService : VpnService() {
                                 splitMode,
                                 selectedApps,
                                 excludedIpsDomains,
+                                localSocksPort,
                                 startGeneration,
                             )
                         }
@@ -161,6 +242,7 @@ class VeloceVpnService : VpnService() {
         splitMode: String,
         selectedApps: List<String>,
         excludedIpsDomains: List<String>,
+        localSocksPort: Int,
         startGeneration: Long,
     ) {
         try {
@@ -231,118 +313,17 @@ class VeloceVpnService : VpnService() {
                 return
             }
 
-            // ۲. ساخت و تزریق کانفیگ Xray
-            val xrayConfig = JSONObject(xrayConfigJsonRaw)
-            val routing = xrayConfig.optJSONObject("routing") ?: JSONObject()
-            val existingRules = routing.optJSONArray("rules") ?: JSONArray()
-
-            // همه‌ی rule های نهایی رو روی یه آرایه‌ی واحد می‌سازیم، نه چندتا
-            // آرایه‌ی جدا که آخرش یکی‌شون بقیه رو overwrite کنه.
-            val finalRules = JSONArray()
-
-            if (excludedIpsDomains.isNotEmpty()) {
-                val domainArray = JSONArray()
-                val ipArray = JSONArray()
-
-                for (item in excludedIpsDomains) {
-                    val trimmed = item.trim()
-                    if (trimmed.isEmpty()) continue
-                    if (trimmed.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}(/\\d{1,2})?$")) ||
-                        (trimmed.contains(":") && trimmed.matches(Regex("^[0-9a-fA-F:]+$")))
-                    ) {
-                        ipArray.put(trimmed)
-                    } else {
-                        domainArray.put(trimmed)
-                    }
-                }
-
-                if (domainArray.length() > 0 || ipArray.length() > 0) {
-                    finalRules.put(
-                        JSONObject().apply {
-                            put("type", "field")
-                            if (domainArray.length() > 0) put("domain", domainArray)
-                            if (ipArray.length() > 0) put("ip", ipArray)
-                            put("outboundTag", "direct")
-                        },
-                    )
-                }
-            }
-
-            // rule های اصلی سرور (adblock و غیره) رو حفظ کن
-            for (i in 0 until existingRules.length()) {
-                finalRules.put(existingRules.get(i))
-            }
-
-            finalRules.put(
-                JSONObject()
-                    .put("type", "field")
-                    .put("inboundTag", JSONArray().put("tun-in"))
-                    .put("port", "53")
-                    .put("outboundTag", "dns-out"),
-            )
-            finalRules.put(
-                JSONObject()
-                    .put("type", "field")
-                    .put("inboundTag", JSONArray().put("tun-in"))
-                    .put("outboundTag", "proxy"),
-            )
-
-            routing.put("domainStrategy", "IPIfNonMatch")
-            routing.put("rules", finalRules)
-            xrayConfig.put("routing", routing)
-
-            val env = xrayConfig.optJSONObject("env") ?: JSONObject()
-            env.put("xray.tun.fd", fd.fd.toString())
-            xrayConfig.put("env", env)
-
-            val inbounds = xrayConfig.optJSONArray("inbounds") ?: JSONArray()
-            inbounds.put(
-                JSONObject().apply {
-                    put("tag", "tun-in")
-                    put("protocol", "tun")
-                    put(
-                        "settings",
-                        JSONObject().apply {
-                            put("name", "tun0")
-                            put("mtu", TUN_MTU)
-                        },
-                    )
-                    put(
-                        "sniffing",
-                        JSONObject().apply {
-                            put("enabled", true)
-                            put("destOverride", JSONArray().put("http").put("tls").put("quic"))
-                            put("routeOnly", false)
-                        },
-                    )
-                },
-            )
-            xrayConfig.put("inbounds", inbounds)
-
-            val outbounds = xrayConfig.optJSONArray("outbounds") ?: JSONArray()
-            var hasDnsOut = false
-            for (i in 0 until outbounds.length()) {
-                if (outbounds.getJSONObject(i).optString("tag") == "dns-out") {
-                    hasDnsOut = true
-                    break
-                }
-            }
-            if (!hasDnsOut) {
-                outbounds.put(JSONObject().put("tag", "dns-out").put("protocol", "dns"))
-            }
-            xrayConfig.put("outbounds", outbounds)
-
-            xrayConfig.put(
-                "dns",
-                JSONObject().put(
-                    "servers",
-                    JSONArray()
-                        .put("https://1.1.1.1/dns-query")
-                        .put("https://[2606:4700:4700::1111]/dns-query")
-                        .put("1.1.1.1")
-                        .put("2606:4700:4700::1111"),
-                ),
-            )
+            // ۲. ساخت کانفیگ امن Xray. کانفیگ سرور به‌عنوان ورودی غیرقابل‌اعتماد
+            // در نظر گرفته می‌شود؛ همه‌ی inboundها با tun و SOCKS لوکال جایگزین
+            // می‌شوند تا هیچ listener روی LAN باز نشود.
+            val xrayConfig =
+                XrayConfigBuilder.build(
+                    rawConfig = xrayConfigJsonRaw,
+                    tunFd = fd.fd,
+                    socksPort = localSocksPort,
+                    excludedIpsDomains = excludedIpsDomains,
+                    mtu = TUN_MTU,
+                )
 
             val file = File(noBackupFilesDir, XRAY_CONFIG_FILE_NAME)
             if (file.exists()) file.delete()
@@ -380,9 +361,16 @@ class VeloceVpnService : VpnService() {
 
             // ۴. سرویس پیش‌زمینه از قبل بالا آمده؛ فقط وضعیت را تایید می‌کنیم.
             isRunning = true
+            isReconnecting = false
+            reconnectAttempts = 0
+            healthFailures = 0
+            totalDownBytes = 0L
+            totalUpBytes = 0L
+            statsAvailable = false
             updateNotification(getString(R.string.vpn_connected))
             Log.d(TAG, "VPN connected successfully.")
             registerNetworkCallback()
+            startMonitors()
         } catch (e: Exception) {
             // بدون stack trace تا احتمال ثبت محتوای کانفیگ/آدرس سرور در لاگ کم شود.
             Log.e(TAG, "startVpn failed: ${e.javaClass.simpleName}: ${e.message}")
@@ -406,6 +394,13 @@ class VeloceVpnService : VpnService() {
         isRunning = false
         cleanupTunnel()
         isStarting = false
+
+        // A reconnect failure is retried with backoff instead of tearing the
+        // foreground service down after the first transient error.
+        if (isReconnecting && !stopRequested.get() && activeConfigJson != null) {
+            scheduleReconnect()
+            return
+        }
         stopForegroundAndSelf()
     }
 
@@ -493,19 +488,39 @@ class VeloceVpnService : VpnService() {
                             } catch (_: Exception) {
                             }
                         }
+                        if (isReconnecting && !isStarting) scheduleReconnect(immediate = true)
                     }
 
                     override fun onLost(network: Network) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            // Prefer a still-usable network (e.g. Wi-Fi lost,
+                            // mobile already up) before restarting Xray.
+                            val usable = usableNetworkExcept(network)
                             try {
-                                // Fall back to the system default set of
-                                // underlying networks. Without this, a
-                                // Wi-Fi -> mobile handover can leave the
-                                // tunnel bound to a dead network.
-                                setUnderlyingNetworks(null)
+                                setUnderlyingNetworks(
+                                    if (usable != null) arrayOf(usable) else null,
+                                )
                             } catch (_: Exception) {
                             }
+                            if (!isStarting && usable == null && (isRunning || isReconnecting)) {
+                                scheduleReconnect()
+                            }
                         }
+                    }
+
+                    override fun onCapabilitiesChanged(
+                        network: Network,
+                        capabilities: NetworkCapabilities,
+                    ) {
+                        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                            if (!isStarting && (isRunning || isReconnecting)) scheduleReconnect()
+                        } else if (isReconnecting && !isStarting) {
+                            scheduleReconnect(immediate = true)
+                        }
+                    }
+
+                    override fun onUnavailable() {
+                        if (!isStarting && (isRunning || isReconnecting)) scheduleReconnect()
                     }
                 }
             manager.registerNetworkCallback(request, networkCallback!!)
@@ -538,10 +553,218 @@ class VeloceVpnService : VpnService() {
     }
 
     private fun cleanupTunnel() {
+        stopMonitors()
         stopXrayProcess()
         unregisterNetworkCallback()
         closeTunFd()
         clearConfigFile()
+        statsAvailable = false
+    }
+
+    private fun startMonitors() {
+        stopMonitors()
+        val statsExecutor = Executors.newSingleThreadScheduledExecutor()
+        monitor = statsExecutor
+        statsExecutor.scheduleWithFixedDelay(
+            { pollMetrics() },
+            1200L,
+            1000L,
+            TimeUnit.MILLISECONDS,
+        )
+
+        val healthExecutor = Executors.newSingleThreadScheduledExecutor()
+        healthMonitor = healthExecutor
+        healthExecutor.scheduleWithFixedDelay(
+            { healthProbe() },
+            15L,
+            HEALTH_INTERVAL_SECONDS,
+            TimeUnit.SECONDS,
+        )
+    }
+
+    private fun stopMonitors() {
+        try {
+            monitor?.shutdownNow()
+        } catch (_: Exception) {
+        }
+        monitor = null
+        try {
+            healthMonitor?.shutdownNow()
+        } catch (_: Exception) {
+        }
+        healthMonitor = null
+    }
+
+    private fun pollMetrics() {
+        if (!isRunning || stopRequested.get() || isReconnecting) return
+        try {
+            val connection = URL("http://127.0.0.1:$METRICS_PORT/metrics").openConnection() as HttpURLConnection
+            connection.connectTimeout = 1500
+            connection.readTimeout = 1500
+            connection.requestMethod = "GET"
+            try {
+                if (connection.responseCode != 200) return
+                val body =
+                    BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
+                        reader.readText()
+                    }
+                val down = findCounter(body, "downlink")
+                val up = findCounter(body, "uplink")
+                if (down != null && up != null) {
+                    totalDownBytes = down
+                    totalUpBytes = up
+                    statsAvailable = true
+                }
+            } finally {
+                connection.disconnect()
+            }
+        } catch (e: Exception) {
+            // Metrics are best-effort; the UI falls back to device totals.
+            statsAvailable = false
+            Log.d(TAG, "metrics unavailable: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * Prometheus output is line based: `metric_name{labels} value`.
+     * Xray exposes global traffic counters; per-inbound counters are used as
+     * a fallback if the metric set changes between Xray versions.
+     */
+    private fun findCounter(
+        body: String,
+        direction: String,
+    ): Long? {
+        var bestScore = -1
+        var bestValue: Long? = null
+        for (line in body.lineSequence()) {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+            val space = trimmed.lastIndexOf(' ')
+            if (space <= 0) continue
+            val value = trimmed.substring(space + 1).toDoubleOrNull() ?: continue
+            val metric = trimmed.substring(0, space)
+            val name = metric.substringBefore('{')
+            if (!name.contains("bytes") || !name.contains(direction)) continue
+            val score =
+                when {
+                    name.contains("traffic") && !name.contains("inbound") && !name.contains("outbound") -> 4
+                    name.contains("traffic") -> 3
+                    name.contains("outbound") -> 2
+                    name.contains("inbound") -> 1
+                    else -> 0
+                }
+            if (score > bestScore || (score == bestScore && value > (bestValue ?: -1L))) {
+                bestScore = score
+                bestValue = value.toLong()
+            }
+        }
+        return bestValue
+    }
+
+    private fun healthProbe() {
+        if (!isRunning || isReconnecting || stopRequested.get()) return
+
+        val targets = listOf("1.1.1.1" to 443, "8.8.8.8" to 53)
+        var ok = false
+        for ((host, port) in targets) {
+            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", activeSocksPort))
+            val socket = Socket(proxy)
+            try {
+                socket.connect(InetSocketAddress(host, port), 6000)
+                socket.soTimeout = 6000
+                ok = true
+                break
+            } catch (_: Exception) {
+            } finally {
+                try {
+                    socket.close()
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        if (ok) {
+            healthFailures = 0
+        } else {
+            healthFailures++
+            if (healthFailures >= HEALTH_FAILURE_THRESHOLD) {
+                healthFailures = 0
+                scheduleReconnect()
+            }
+        }
+    }
+
+    private fun usableNetworkExcept(lost: Network): Network? {
+        val manager = connectivityManager ?: return null
+        val active = manager.activeNetwork ?: return null
+        if (active == lost) return null
+        val capabilities = manager.getNetworkCapabilities(active) ?: return null
+        return if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            active
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Schedules a reconnect with bounded exponential backoff. The service
+     * stays alive (and the notification stays visible) while waiting so the
+     * user can still stop it from the notification, tile or app.
+     */
+    private fun scheduleReconnect(immediate: Boolean = false) {
+        if (stopRequested.get() || activeConfigJson == null) return
+
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            lastError = "reconnect_failed"
+            isReconnecting = false
+            isRunning = false
+            cleanupTunnel()
+            stopForegroundAndSelf()
+            return
+        }
+
+        isReconnecting = true
+        isRunning = false
+        reconnectScheduled = true
+        mainHandler.removeCallbacks(reconnectRunnable)
+
+        val delayMs =
+            if (immediate) {
+                0L
+            } else {
+                when (reconnectAttempts) {
+                    0 -> 1000L
+                    1 -> 2000L
+                    2 -> 4000L
+                    3 -> 8000L
+                    4 -> 16000L
+                    else -> 30000L
+                }
+            }
+        updateNotification(getString(R.string.vpn_reconnecting))
+        mainHandler.postDelayed(reconnectRunnable, delayMs)
+    }
+
+    private fun reconnectNow() {
+        if (stopRequested.get() || !isReconnecting) return
+        val config = activeConfigJson ?: return
+        reconnectScheduled = false
+        reconnectAttempts++
+
+        val reconnectGeneration = generation.incrementAndGet()
+        isStarting = true
+        lastError = null
+        worker.execute {
+            startVpn(
+                config,
+                activeSplitEnabled,
+                activeSplitMode,
+                activeSelectedApps,
+                activeExcludedIpsDomains,
+                activeSocksPort,
+                reconnectGeneration,
+            )
+        }
     }
 
     /**
@@ -552,6 +775,9 @@ class VeloceVpnService : VpnService() {
     private fun requestStop() {
         generation.incrementAndGet()
         stopRequested.set(true)
+        isReconnecting = false
+        reconnectScheduled = false
+        mainHandler.removeCallbacks(reconnectRunnable)
         try {
             worker.execute { stopVpnInternal() }
         } catch (_: RejectedExecutionException) {
@@ -567,6 +793,11 @@ class VeloceVpnService : VpnService() {
         clearConfigFile()
         isRunning = false
         isStarting = false
+        isReconnecting = false
+        reconnectScheduled = false
+        mainHandler.removeCallbacks(reconnectRunnable)
+        reconnectAttempts = 0
+        healthFailures = 0
         // Do not clear lastError here: failStart() calls stopSelf(), and
         // MainActivity still needs the reason to report to Flutter.
         stopForegroundAndSelf()

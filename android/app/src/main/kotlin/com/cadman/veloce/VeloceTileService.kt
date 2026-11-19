@@ -41,7 +41,7 @@ class VeloceTileService : TileService() {
     override fun onClick() {
         super.onClick()
 
-        if (VeloceVpnService.isRunning || VeloceVpnService.isStarting) {
+        if (VeloceVpnService.isRunning || VeloceVpnService.isStarting || VeloceVpnService.isReconnecting) {
             // قطع اتصال مستقیم از کاشی
             val stopIntent =
                 Intent(this, VeloceVpnService::class.java).apply {
@@ -148,11 +148,13 @@ class VeloceTileService : TileService() {
         val tile = qsTile ?: return
         val isRunning = VeloceVpnService.isRunning
         val isStarting = VeloceVpnService.isStarting
+        val isReconnecting = VeloceVpnService.isReconnecting
         tile.state = if (isRunning) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label =
             when {
                 isRunning -> getString(R.string.tile_connected)
                 isStarting -> getString(R.string.tile_connecting)
+                isReconnecting -> getString(R.string.tile_reconnecting)
                 else -> getString(R.string.tile_idle)
             }
         tile.updateTile()

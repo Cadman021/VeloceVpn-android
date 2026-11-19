@@ -33,6 +33,7 @@ class _FakeBridge extends NativeVpnBridge {
 
   bool startResult;
   bool running = false;
+  bool reconnecting = false;
   int startCalls = 0;
 
   @override
@@ -56,6 +57,9 @@ class _FakeBridge extends NativeVpnBridge {
 
   @override
   Future<bool> status() async => running;
+
+  @override
+  Future<bool> isNativeReconnecting() async => reconnecting;
 
   @override
   Future<Map<String, int>> speed() async =>
@@ -167,6 +171,11 @@ void main() {
     expect(vpn.status, ConnStatus.connected);
 
     bridge.running = false;
+    bridge.reconnecting = true;
+    await vpn.syncStatus();
+    expect(vpn.status, ConnStatus.reconnecting);
+
+    bridge.reconnecting = false;
     await vpn.syncStatus();
     expect(vpn.status, ConnStatus.disconnected);
   });

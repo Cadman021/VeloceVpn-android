@@ -5,8 +5,10 @@
     <string name="notification_channel_description">نمایش وضعیت اتصال VPN و کنترل آن</string>
     <string name="vpn_connected">متصل | محافظت‌شده</string>
     <string name="vpn_connecting">در حال اتصال…</string>
+    <string name="vpn_reconnecting">در حال اتصال مجدد…</string>
     <string name="disconnect">قطع اتصال</string>
     <string name="tile_connected">Veloce: متصل</string>
     <string name="tile_connecting">Veloce: در حال اتصال</string>
+    <string name="tile_reconnecting">Veloce: در حال اتصال مجدد</string>
     <string name="tile_idle">Veloce VPN</string>
 </resources>
