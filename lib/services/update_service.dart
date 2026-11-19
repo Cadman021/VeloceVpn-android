@@ -71,16 +71,14 @@ class UpdateService {
   /// Returns the latest public release, or `null` when the installed version
   /// is already current (or the repository has no published release yet).
   Future<ReleaseInfo?> fetchLatest({String? currentVersion}) async {
-    final response = await _client
-        .get(
-          Uri.parse(_latestReleaseApi),
-          headers: const {
-            'Accept': 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-            'User-Agent': 'Veloce-VPN-Android-Updater',
-          },
-        )
-        .timeout(const Duration(seconds: 12));
+    final response = await _client.get(
+      Uri.parse(_latestReleaseApi),
+      headers: const {
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'Veloce-VPN-Android-Updater',
+      },
+    ).timeout(const Duration(seconds: 12));
 
     if (response.statusCode == 404) return null;
     if (response.statusCode != 200) {

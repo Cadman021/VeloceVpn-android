@@ -12,7 +12,8 @@ UpdateService _serviceFor(
 }) {
   return UpdateService(
     client: MockClient((request) async {
-      expect(request.url.path, '/repos/Cadman021/VeloceVpn-android/releases/latest');
+      expect(request.url.path,
+          '/repos/Cadman021/VeloceVpn-android/releases/latest');
       expect(request.headers['Accept'], 'application/vnd.github+json');
       return http.Response(
         jsonEncode(release),
@@ -35,7 +36,8 @@ void main() {
   test('returns a newer GitHub release', () async {
     final service = _serviceFor({
       'tag_name': 'v1.1.0',
-      'html_url': 'https://github.com/Cadman021/VeloceVpn-android/releases/tag/v1.1.0',
+      'html_url':
+          'https://github.com/Cadman021/VeloceVpn-android/releases/tag/v1.1.0',
       'body': 'What is new',
       'published_at': '2026-11-18T10:00:00Z',
     });
@@ -52,7 +54,8 @@ void main() {
   test('returns null when the installed version is current', () async {
     final service = _serviceFor({
       'tag_name': 'v1.0.0',
-      'html_url': 'https://github.com/Cadman021/VeloceVpn-android/releases/tag/v1.0.0',
+      'html_url':
+          'https://github.com/Cadman021/VeloceVpn-android/releases/tag/v1.0.0',
     });
     addTearDown(service.dispose);
 
