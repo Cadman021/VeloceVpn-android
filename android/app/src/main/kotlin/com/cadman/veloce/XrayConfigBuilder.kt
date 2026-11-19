@@ -245,7 +245,9 @@ object XrayConfigBuilder {
             if (isIpLiteral(item)) {
                 ips.put(item)
             } else if (isDomainLiteral(item)) {
-                domains.put(item)
+                // The UI accepts `*.example.com`; Xray's domain matcher uses
+                // the `domain:` prefix for suffix matching.
+                domains.put(if (item.startsWith("*.")) "domain:${item.substring(2)}" else item)
             }
         }
         return domains to ips

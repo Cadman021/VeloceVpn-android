@@ -27,7 +27,7 @@ class XrayConfigBuilderTest {
             rawConfig = baseConfig,
             tunFd = 7,
             socksPort = 10808,
-            excludedIpsDomains = listOf("192.168.0.0/16", "example.com"),
+            excludedIpsDomains = listOf("192.168.0.0/16", "example.com", "*.example.org"),
             mtu = 1400,
         )
 
@@ -49,7 +49,7 @@ class XrayConfigBuilderTest {
             rawConfig = baseConfig,
             tunFd = 1,
             socksPort = 10809,
-            excludedIpsDomains = listOf("192.168.0.0/16", "example.com"),
+            excludedIpsDomains = listOf("192.168.0.0/16", "example.com", "*.example.org"),
             mtu = 1400,
         )
 
@@ -61,8 +61,13 @@ class XrayConfigBuilderTest {
         assertTrue(hasDirect)
 
         val rules = built.getJSONObject("routing").getJSONArray("rules")
-        assertTrue(rules.getJSONObject(0).has("domain"))
+        val domains = rules.getJSONObject(0).getJSONArray("domain")
         assertTrue(rules.getJSONObject(0).has("ip"))
+        var hasWildcard = false
+        for (i in 0 until domains.length()) {
+            if (domains.getString(i) == "domain:example.org") hasWildcard = true
+        }
+        assertTrue(hasWildcard)
         assertEquals("direct", rules.getJSONObject(0).getString("outboundTag"))
     }
 
