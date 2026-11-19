@@ -184,7 +184,7 @@ class VeloceVpnService : VpnService() {
                 val splitMode = intent.getStringExtra("split_mode") ?: "exclusive"
                 val selectedApps = intent.getStringArrayListExtra("selected_apps") ?: arrayListOf()
                 val excludedIpsDomains = intent.getStringArrayListExtra("excluded_ips") ?: arrayListOf()
-                val localSocksPort = intent.getIntExtra(EXTRA_LOCAL_SOCKS_PORT, 10808)
+                val localSocksPort = chooseFreePort(intent.getIntExtra(EXTRA_LOCAL_SOCKS_PORT, 10808))
                 if (xrayConfigJson != null) {
                     activeConfigJson = xrayConfigJson
                     activeSplitEnabled = splitEnabled
