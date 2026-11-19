@@ -2,7 +2,7 @@
 
 A lightweight Android VPN client built with Flutter and the [Xray-core](https://github.com/XTLS/Xray-core) native library (via `libXray`). The app downloads a health-checked server list from the Veloce backend, connects through a local TUN interface, and provides per-app split tunneling, domain/IP exclusions, an ad-block server variant and a Quick Settings tile.
 
-> **Status:** Android-only, 1.0.0. The iOS, web, Windows, Linux and macOS folders are Flutter template leftovers and are not supported.
+> **Status:** Android-only, 1.1.0. The iOS, web, Windows, Linux and macOS folders are Flutter template leftovers and are not supported.
 
 ---
 
@@ -19,7 +19,10 @@ A lightweight Android VPN client built with Flutter and the [Xray-core](https://
 - IPv4 and IPv6 routed through the tunnel
 - Keystore-encrypted last-config cache and disabled Android backup
 - Offline server-list cache with retry
-- Live throughput indicator on the home screen
+- Live, tunnel-specific throughput from Xray's loopback metrics (device-wide totals as a fallback)
+- Automatic reconnect with bounded backoff after network handover, server drops and failed health probes
+- In-app update check against GitHub Releases (once per day, no identifiers)
+- Redacted diagnostics report for support requests
 
 ---
 
@@ -54,6 +57,7 @@ Changing the location while connected switches the tunnel automatically. Changin
 
 - No analytics, advertising SDKs or crash-reporting SDKs are included in the app.
 - The app requests the candidate list and Xray configuration from `https://api.honeyface.ir`; as with any HTTPS request, that server sees your IP address and standard request metadata.
+- The update checker requests the public GitHub Releases API at most once per day. GitHub sees the user's IP address and a generic User-Agent; no account, device ID or analytics identifier is sent.
 - VPN traffic is carried by third-party servers. Veloce does not operate every server in the list and cannot guarantee an operator's logging policy.
 - Server configurations contain connection credentials. The last configuration is stored encrypted with Android Keystore, the temporary Xray config file lives in `noBackupFilesDir` and is deleted when the tunnel stops, and Android cloud backup/device-to-device transfer is disabled.
 - Country flags are rendered locally as Unicode emoji; the app does not request flag images from an external CDN.
@@ -126,8 +130,8 @@ Configure these repository secrets before tagging:
 Then bump `version:` in `pubspec.yaml`, commit, and push a matching tag:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
 ---
@@ -140,13 +144,15 @@ lib/
   controllers/
     vpn_controller.dart         connection state, API calls, preferences
     split_tunneling_controller.dart
+    update_controller.dart      GitHub release check and dismissal state
   screens/                      splash, home, locations, settings, split tunneling
-  services/                     API client and models
+  services/                     API client, release/version services and models
   theme/                        colors, Material theme, i18n
   widgets/                      country flag
 android/app/src/main/kotlin/com/cadman/veloce/
   MainActivity.kt               MethodChannel bridge, VPN permission, ping, speed
-  VeloceVpnService.kt           VpnService + Xray TUN lifecycle + notification
+  VeloceVpnService.kt           VpnService + Xray TUN lifecycle, reconnect, health/metrics
+  XrayConfigBuilder.kt          sanitizes downloaded configs and adds safe listeners
   VeloceTileService.kt          Quick Settings tile
   SecureConfigStore.kt          Keystore-encrypted last-config cache
 ```
@@ -157,15 +163,16 @@ Backend contract used by the client:
 - `GET /api/v1/xray/{configId}.json` → `{ "xray_config": { ... } }`
 - `GET /api/v1/xray/{configId}.adblock.json` → same shape, ad-block variant
 
-The API client accepts an ordered list of base URLs (`kCentralApiBases` in `lib/services/api_service.dart`). Only the primary host is configured in 1.0.0; additional mirrors can be added there without changing the rest of the app.
+The API client accepts an ordered list of base URLs (`kCentralApiBases` in `lib/services/api_service.dart`). Only the primary host is configured in 1.1.0; additional mirrors can be added there without changing the rest of the app.
 
 ---
 
-## Known limitations (1.0.0)
+## Known limitations (1.1.0)
 
-- The throughput indicator uses device-wide `TrafficStats`, not the Xray tunnel only. It is a device activity indicator, not a per-tunnel accounting value.
-- There is no automatic reconnect after a network handover or a server-side drop; the app updates the underlying network and asks the user to reconnect.
-- The app does not verify a cryptographic signature on downloaded server configurations in addition to HTTPS.
+- Throughput uses Xray's loopback metrics when available. For the first ~1–2 seconds after connecting, or if the metrics endpoint cannot bind, the app falls back to device-wide `TrafficStats`; that fallback is not per-tunnel accounting.
+- Auto-reconnect is bounded to six attempts with exponential backoff. After that the tunnel stops and the user must reconnect manually; aggressive OEM battery managers may also stop the service.
+- The app does not verify a cryptographic signature on downloaded server configurations in addition to HTTPS. Config hardening removes server-provided inbound listeners and logging, but a compromised backend could still return malicious outbound rules.
+- The health probe uses a loopback SOCKS connection to public IP addresses (`1.1.1.1:443` / `8.8.8.8:53`); a server that blocks both destinations may look unhealthy even when other traffic works.
 - Split tunneling is per-app, not per-UID/profile; work profiles and secondary users may behave differently depending on the device.
 - Android may stop the foreground service on aggressive OEM battery managers. Users can enable Always-on VPN in Android settings for a stronger guarantee.
 - The iPhone/iPad, web and desktop folders are not implemented; do not ship them as supported targets.

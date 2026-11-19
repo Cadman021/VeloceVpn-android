@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest released version (1.0.x). Development builds from `main` are not supported releases and may not receive backports.
+Security fixes are applied to the latest released version (1.1.x). Development builds from `main` are not supported releases and may not receive backports.
 
 ## Reporting a vulnerability
 

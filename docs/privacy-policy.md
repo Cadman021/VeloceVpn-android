@@ -1,6 +1,6 @@
 # Veloce VPN — Privacy Policy
 
-**Last updated: 2026-11-17**
+**Last updated: 2026-11-18**
 
 This policy describes what the Veloce VPN Android application (“Veloce”, “the app”) does with information. It does not describe the independent logging practices of third-party VPN servers or network operators.
 
@@ -42,7 +42,8 @@ When connected, your internet traffic is carried by the VPN server you selected.
 ### Third-party content
 
 - Country flags are rendered locally as Unicode emoji. The app does not request flag images from an external CDN.
-- Release downloads and update checks (if you open the GitHub release page) are served by GitHub and are subject to GitHub's privacy policy.
+- The app checks the public GitHub Releases API at most once per day. GitHub receives your IP address and a generic User-Agent; no account, device identifier or analytics identifier is sent. Opening a release link is served by GitHub under its privacy policy.
+- Throughput is read from a loopback-only metrics endpoint inside the app. If those metrics are unavailable, the app falls back to Android's device-wide traffic counters; neither value is transmitted.
 
 The app does not integrate Telegram. The backend may collect publicly available server configurations from public channels; this happens outside your device and is not linked to your app usage.
 
