@@ -114,8 +114,7 @@ class UpdateService {
       ),
     );
 
-    if (currentVersion != null &&
-        !AppVersion.tryParse(tag)!.isNewerThan(currentVersion)) {
+    if (currentVersion != null && !parsed.isNewerThan(currentVersion)) {
       return null;
     }
     return release;
