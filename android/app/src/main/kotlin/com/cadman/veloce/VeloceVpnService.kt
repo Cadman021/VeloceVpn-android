@@ -715,6 +715,7 @@ class VeloceVpnService : VpnService() {
      */
     private fun scheduleReconnect(immediate: Boolean = false) {
         if (stopRequested.get() || activeConfigJson == null) return
+        if (reconnectScheduled && !immediate) return
 
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
             lastError = "reconnect_failed"
